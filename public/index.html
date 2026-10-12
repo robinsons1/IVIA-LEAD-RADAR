@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>IVIA Lead Radar | Buscador y Auditor de Clientes Potenciales</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <!-- ══ NAVBAR EJECUTIVA IVIA ══ -->
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand-wrap">
+        <div class="brand-logo">
+          <span class="brand-dot"></span>
+          <span class="brand-name">IVIA</span>
+          <span class="brand-tag">LEAD RADAR</span>
+        </div>
+        <span class="brand-subtitle">Motor de Prospección &amp; Auditoría Digital · Ingversia</span>
+      </div>
+
+      <div class="topbar-actions">
+        <div class="engine-status" id="engine-status-pill">
+          <span class="status-dot" id="engine-status-dot"></span>
+          <span id="engine-status-text">Motor Playwright Listo</span>
+        </div>
+
+        <button class="btn btn-outline" id="btn-open-single-audit" title="Auditar un negocio o página web manualmente">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <span>Auditar 1 Web</span>
+        </button>
+
+        <a href="/api/export/xlsx" class="btn btn-emerald" title="Descargar base de datos en formato Excel (.xlsx)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span>Exportar Excel (.xlsx)</span>
+        </a>
+
+        <a href="/api/export/csv" class="btn btn-outline" title="Descargar en formato CSV">
+          <span>CSV</span>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- ══ PANEL 1: BUSCADOR DE PROSPECTOS + PLANTILLAS DE NICHOS ══ -->
+    <section class="search-panel card">
+      <div class="search-panel-header">
+        <div>
+          <h2>Descubrir y Auditar Clientes Potenciales en Google Maps</h2>
+          <p>Extrae negocios reales gratis con Playwright, revisa si no tienen web, si usan Instagram/Gmail o si su web falla, y genera el mensaje de WhatsApp listo para enviar.</p>
+        </div>
+        <div class="niche-presets">
+          <span class="preset-label">Nichos rentables IVIA:</span>
+          <button type="button" class="preset-chip" data-query="Clínicas Odontológicas" data-location="Chapinero, Bogotá">🦷 Odontólogos</button>
+          <button type="button" class="preset-chip" data-query="Firmas de Abogados" data-location="Bogotá">⚖️ Abogados</button>
+          <button type="button" class="preset-chip" data-query="Contadores y Asesoría Contable" data-location="Bogotá">📊 Contadores</button>
+          <button type="button" class="preset-chip" data-query="Consultorios Médicos" data-location="Usaquén, Bogotá">🏥 Consultorios</button>
+          <button type="button" class="preset-chip" data-query="Ferreterías y Materiales" data-location="Bogotá">🏗️ Ferreterías</button>
+          <button type="button" class="preset-chip" data-query="Inmobiliarias" data-location="Medellín">🏢 Inmobiliarias</button>
+          <button type="button" class="preset-chip" data-query="Talleres Automotrices" data-location="Bogotá">🔧 Talleres</button>
+          <button type="button" class="preset-chip" data-query="Empresas de Seguridad y Salud en el Trabajo SST" data-location="Bogotá">🛡️ Empresas SST</button>
+        </div>
+      </div>
+
+      <form id="scrape-form" class="search-form">
+        <div class="form-field">
+          <label for="input-query">Rubro o Tipo de Negocio</label>
+          <input type="text" id="input-query" value="Clínicas Odontológicas" placeholder="Ej. Odontólogos, Abogados, Ferreterías, Clínicas..." required />
+        </div>
+
+        <div class="form-field">
+          <label for="input-location">Ciudad, Localidad o Barrio</label>
+          <input type="text" id="input-location" value="Chapinero, Bogotá" placeholder="Ej. Chapinero Bogotá, El Poblado Medellín, Cali..." required />
+        </div>
+
+        <div class="form-field form-field-sm">
+          <label for="input-limit">Máx. Negocios</label>
+          <select id="input-limit">
+            <option value="5">5 (Prueba rápida)</option>
+            <option value="15" selected>15 prospectos</option>
+            <option value="30">30 prospectos</option>
+            <option value="50">50 prospectos</option>
+            <option value="100">100 prospectos</option>
+          </select>
+        </div>
+
+        <div class="form-field form-options">
+          <label class="checkbox-label" title="Analiza si la web carga, si tiene SSL, servidor de correo MX, botón de WhatsApp y correos @gmail">
+            <input type="checkbox" id="input-audit" checked />
+            <span>Auditoría profunda (SSL, MX, Correos, WhatsApp)</span>
+          </label>
+          <label class="checkbox-label" title="Desmarca esta opción si quieres ver la ventana de Chromium navegando en vivo">
+            <input type="checkbox" id="input-headless" checked />
+            <span>Modo silencioso en segundo plano (Headless)</span>
+          </label>
+        </div>
+
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary btn-lg" id="btn-start-scrape">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            <span>Buscar Clientes Ahora</span>
+          </button>
+          <button type="button" class="btn btn-danger btn-lg hidden" id="btn-stop-scrape">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><rect x="6" y="6" width="12" height="12"/></svg>
+            <span>Detener</span>
+          </button>
+        </div>
+      </form>
+
+      <!-- CONSOLA EN VIVO ESTILO IVIA -->
+      <div class="live-console" id="live-console">
+        <div class="console-bar">
+          <div class="console-dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <div class="console-title" id="console-progress-label">Consola de Telemetría IVIA · Esperando orden de búsqueda</div>
+          <button type="button" class="btn-clear-log" id="btn-toggle-console">Ocultar / Mostrar Log</button>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" id="scrape-progress-bar" style="width: 0%"></div>
+        </div>
+        <div class="console-body" id="console-logs">
+          <div class="log-entry info">Sistema listo. Selecciona un nicho arriba o usa en consola: <code>npm run scrape -- --query "Odontólogos" --location "Bogotá" --limit 15</code></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══ PANEL 2: TARJETAS KPI / FILTROS DE DOLOR DIGITAL ══ -->
+    <section class="kpi-grid">
+      <button type="button" class="kpi-card active" data-filter="ALL">
+        <div class="kpi-top">
+          <span class="kpi-label">Total Prospectos</span>
+          <span class="kpi-badge slate">Base Local</span>
+        </div>
+        <div class="kpi-value" id="stat-total">0</div>
+        <div class="kpi-sub">Todos los negocios analizados</div>
+      </button>
+
+      <button type="button" class="kpi-card" data-filter="NO_WEBSITE">
+        <div class="kpi-top">
+          <span class="kpi-label">🔴 Sin Página Web</span>
+          <span class="kpi-badge red">Prioridad #1</span>
+        </div>
+        <div class="kpi-value" id="stat-no-website">0</div>
+        <div class="kpi-sub">Ideales para Plan Básico ($89k) o Estándar</div>
+      </button>
+
+      <button type="button" class="kpi-card" data-filter="SOCIAL_ONLY">
+        <div class="kpi-top">
+          <span class="kpi-label">🟠 Solo Redes / Linktree</span>
+          <span class="kpi-badge amber">Sin Dominio</span>
+        </div>
+        <div class="kpi-value" id="stat-social-only">0</div>
+        <div class="kpi-sub">Solo tienen Instagram, FB o wa.me</div>
+      </button>
+
+      <button type="button" class="kpi-card" data-filter="BROKEN_OR_INSECURE">
+        <div class="kpi-top">
+          <span class="kpi-label">🚨 Web Caída o Sin SSL</span>
+          <span class="kpi-badge red">Urgencia</span>
+        </div>
+        <div class="kpi-value" id="stat-broken">0</div>
+        <div class="kpi-sub">Sitio roto (404/DNS) o "No Seguro"</div>
+      </button>
+
+      <button type="button" class="kpi-card" data-filter="GENERIC_EMAIL">
+        <div class="kpi-top">
+          <span class="kpi-label">🟡 Usan @gmail / @hotmail</span>
+          <span class="kpi-badge blue">Correo Corp.</span>
+        </div>
+        <div class="kpi-value" id="stat-generic-email">0</div>
+        <div class="kpi-sub">Oportunidad de Correo Corporativo</div>
+      </button>
+
+      <button type="button" class="kpi-card" data-filter="WHATSAPP_MOBILE">
+        <div class="kpi-top">
+          <span class="kpi-label">🟢 Con WhatsApp Móvil</span>
+          <span class="kpi-badge emerald">1-Clic Listo</span>
+        </div>
+        <div class="kpi-value" id="stat-whatsapp">0</div>
+        <div class="kpi-sub">Línea celular 3xx para mensaje directo</div>
+      </button>
+    </section>
+
+    <!-- ══ PANEL 3: TABLA INTERACTIVA DE PROSPECTOS & MINI-CRM ══ -->
+    <section class="leads-section card">
+      <div class="leads-toolbar">
+        <div class="toolbar-left">
+          <div class="search-box">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" id="filter-search" placeholder="Buscar por nombre, rubro, ciudad, correo o teléfono..." />
+          </div>
+
+          <select id="filter-crm" class="toolbar-select">
+            <option value="ALL">Estado CRM: Todos</option>
+            <option value="nuevo">🆕 Nuevos (Sin contactar)</option>
+            <option value="contactado">📤 Contactados</option>
+            <option value="interesado">🔥 Interesados</option>
+            <option value="propuesta">📋 Propuesta enviada</option>
+            <option value="cliente">✅ Clientes cerrados</option>
+            <option value="descartado">❌ Descartados</option>
+          </select>
+
+          <select id="filter-sort" class="toolbar-select">
+            <option value="score_desc">Ordenar: Mayor Score IVIA</option>
+            <option value="reviews_desc">Ordenar: Más Reseñas en Maps</option>
+            <option value="recent">Ordenar: Más Recientes</option>
+          </select>
+        </div>
+
+        <div class="toolbar-right">
+          <span class="results-counter" id="results-counter">Mostrando 0 prospectos</span>
+          <button type="button" class="btn btn-ghost-danger btn-sm" id="btn-clear-all" title="Vaciar base de datos local">
+            Limpiar Todo
+          </button>
+        </div>
+      </div>
+
+      <div class="table-responsive">
+        <table class="leads-table">
+          <thead>
+            <tr>
+              <th>Score</th>
+              <th>Negocio &amp; Reputación</th>
+              <th>Diagnóstico Digital IVIA</th>
+              <th>Solución Sugerida</th>
+              <th>Contacto &amp; Canales</th>
+              <th>Estado CRM</th>
+              <th style="text-align:right;">Acción Comercial</th>
+            </tr>
+          </thead>
+          <tbody id="leads-tbody">
+            <tr>
+              <td colspan="7" class="empty-state">
+                No hay prospectos cargados aún. Lanza tu primera búsqueda arriba para empezar a detectar oportunidades.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <!-- ══ MODAL DE DIAGNÓSTICO PROFUNDO Y PITCH DE WHATSAPP / EMAIL ══ -->
+  <div class="modal-backdrop hidden" id="pitch-modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div>
+          <span class="modal-kicker" id="modal-lead-category">Categoría</span>
+          <h3 id="modal-lead-name">Nombre del Negocio</h3>
+        </div>
+        <button type="button" class="modal-close" id="btn-close-modal">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Resumen Técnico de la Auditoría -->
+        <div class="audit-summary-grid" id="modal-audit-grid"></div>
+
+        <!-- Selector de Enfoque del Mensaje -->
+        <div class="pitch-tabs">
+          <button type="button" class="pitch-tab active" data-pitch-type="direct">
+            🎯 Enfoque 1: Dolor Detectado + Cero Anticipos (Web / Correo / SSL)
+          </button>
+          <button type="button" class="pitch-tab" data-pitch-type="automation">
+            ⚡ Enfoque 2: Herramientas para Ahorrar Tiempo y Automatización
+          </button>
+        </div>
+
+        <div class="form-field">
+          <label for="modal-pitch-textarea">Mensaje personalizado listo para enviar (puedes editarlo antes de abrir WhatsApp):</label>
+          <textarea id="modal-pitch-textarea" rows="7"></textarea>
+        </div>
+
+        <div class="modal-crm-row">
+          <div class="form-field">
+            <label for="modal-notes-input">Notas internas del prospecto:</label>
+            <input type="text" id="modal-notes-input" placeholder="Ej. Hablé con la Dra. Laura, enviar portafolio el jueves..." />
+          </div>
+          <div class="form-field form-field-sm">
+            <label for="modal-crm-select">Estado CRM:</label>
+            <select id="modal-crm-select">
+              <option value="nuevo">🆕 Nuevo</option>
+              <option value="contactado">📤 Contactado</option>
+              <option value="interesado">🔥 Interesado</option>
+              <option value="propuesta">📋 Propuesta</option>
+              <option value="cliente">✅ Cliente</option>
+              <option value="descartado">❌ Descartado</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline" id="btn-copy-pitch">
+          📋 Copiar Mensaje
+        </button>
+        <button type="button" class="btn btn-outline" id="btn-save-lead-modal">
+          💾 Guardar Notas/Estado
+        </button>
+        <a href="#" target="_blank" class="btn btn-whatsapp" id="btn-send-whatsapp-modal">
+          <span>Enviar por WhatsApp y Marcar Contactado →</span>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ MODAL AUDITORÍA RÁPIDA DE 1 NEGOCIO / WEB ══ -->
+  <div class="modal-backdrop hidden" id="single-audit-modal">
+    <div class="modal-card modal-sm">
+      <div class="modal-header">
+        <div>
+          <span class="modal-kicker">Diagnóstico Instantáneo</span>
+          <h3>Auditar un Negocio o Sitio Web</h3>
+        </div>
+        <button type="button" class="modal-close" id="btn-close-single-modal">&times;</button>
+      </div>
+      <form id="single-audit-form" class="modal-body">
+        <div class="form-field">
+          <label>Nombre del Negocio *</label>
+          <input type="text" id="single-name" placeholder="Ej. Consultorio Dental Sonrisas" required />
+        </div>
+        <div class="form-field">
+          <label>Rubro / Sector</label>
+          <input type="text" id="single-category" placeholder="Ej. Odontología" value="Servicios Profesionales" />
+        </div>
+        <div class="form-field">
+          <label>Ciudad</label>
+          <input type="text" id="single-city" value="Bogotá" />
+        </div>
+        <div class="form-field">
+          <label>Teléfono o WhatsApp (Opcional)</label>
+          <input type="text" id="single-phone" placeholder="Ej. 310 123 4567" />
+        </div>
+        <div class="form-field">
+          <label>Sitio Web o Instagram (Déjalo vacío si no tiene web)</label>
+          <input type="text" id="single-website" placeholder="Ej. https://miempresa.com o vacío" />
+        </div>
+        <div class="modal-footer" style="padding: 1rem 0 0; border: none;">
+          <button type="submit" class="btn btn-primary" id="btn-submit-single-audit">Ejecutar Auditoría IVIA</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>

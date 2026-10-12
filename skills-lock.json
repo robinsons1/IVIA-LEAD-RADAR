@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "skills": {
+    "mcp-builder": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "skillPath": "skills/mcp-builder/SKILL.md",
+      "computedHash": "6498a736a8dc5c645047c8a875b8ea7417e2ad97146f005200e50d20a9337ada"
+    },
+    "playwright-skill": {
+      "source": "lambdatest/agent-skills",
+      "sourceType": "github",
+      "skillPath": "playwright-skill/SKILL.md",
+      "computedHash": "43eb4470d055aae6e909b71b00452bce9b5da65cd3650eaf5337f1a8105f5b73"
+    },
+    "web-scraping": {
+      "source": "bcharleson/webscraping-skill",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "e8ca91f0126d29c939d672a2fccd49e9d111e2b1c6791f5f8773e4e5fb80e8ff"
+    },
+    "webapp-testing": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "skillPath": "skills/webapp-testing/SKILL.md",
+      "computedHash": "3f14af7f5690695209c22fbf8c8d133769a86d64892602c09bb13f135e14e857"
+    }
+  }
+}

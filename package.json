@@ -1,0 +1,19 @@
+{
+  "name": "ivia-lead-radar",
+  "version": "1.0.0",
+  "description": "IVIA Lead Radar — Buscador, Auditor Técnico y Calificador de Clientes Potenciales (Google Maps + Auditoría Web + DNS/SSL + WhatsApp 1-Clic)",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "scrape": "node src/cli.js",
+    "audit": "node src/cli.js --audit-only",
+    "export": "node src/cli.js --export-only"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "cors": "^2.8.5",
+    "exceljs": "^4.4.0",
+    "express": "^4.21.2",
+    "playwright": "^1.50.0"
+  }
+}

@@ -19,6 +19,7 @@ const SOCIAL_DOMAINS = [
   'beacons.ai',
   'bio.link',
   'taplink.cc',
+  'wa.link',
   'doctoralia.co',
   'topdoctors.com.co',
   'paginasamarillas.com.co',
@@ -43,7 +44,26 @@ const FREE_BUILDER_DOMAINS = [
   'negocio.site',
   'business.site',
   'my.canva.site',
-  'carrd.co'
+  'carrd.co',
+  'amawebs.com',
+  'webnode.page',
+  'ueniweb.com',
+  'strikingly.com',
+  'site123.me',
+  'mozello.com',
+  'sumupstore.com',
+  'mitiendanube.com',
+  'empretienda.com'
+];
+
+const SHORTENER_DOMAINS = [
+  'bit.ly',
+  'tinyurl.com',
+  'cutt.ly',
+  'rb.gy',
+  'shorturl.at',
+  't.co',
+  'goo.gl'
 ];
 
 const GENERIC_EMAIL_PROVIDERS = [
@@ -78,7 +98,17 @@ const IGNORE_EMAIL_PATTERNS = [
   /tuempresa\.com/i,
   /correo\.com/i,
   /dominio\.com/i,
-  /email\.com/i
+  /email\.com/i,
+  /ejemplo\.com/i,
+  /ejemplo\./i,
+  /sample\./i,
+  /yourdomain/i,
+  /suempresa/i,
+  /tunegocio/i,
+  /noreply@/i,
+  /no-reply@/i,
+  /u003[ce]/i,
+  /^u00[0-9a-f]{2}/i
 ];
 
 function classifyWebsiteUrl(rawUrl) {
@@ -141,17 +171,30 @@ function classifyWebsiteUrl(rawUrl) {
 
 function extractEmailsFromHtml(html, $ = null) {
   const found = new Set();
+  const $doc = $ || (html ? cheerio.load(html) : null);
+  let textToScan = html || '';
 
-  if ($) {
-    $('a[href^="mailto:"]').each((_, el) => {
-      const href = $(el).attr('href') || '';
+  if ($doc) {
+    $doc('a[href^="mailto:"]').each((_, el) => {
+      const href = $doc(el).attr('href') || '';
       const mail = href.replace(/^mailto:/i, '').split('?')[0].trim().toLowerCase();
       if (mail && mail.includes('@')) found.add(mail);
     });
+
+    const rawHtml = html || $doc.html() || '';
+    if (rawHtml) {
+      const $clean = cheerio.load(rawHtml);
+      $clean('script, style, noscript, svg').remove();
+      const hrefText = [];
+      $clean('a[href]').each((_, el) => {
+        hrefText.push($clean(el).attr('href') || '');
+      });
+      textToScan = `${$clean.root().text()} ${hrefText.join(' ')}`;
+    }
   }
 
   const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,10}/g;
-  const matches = (html || '').match(emailRegex) || [];
+  const matches = textToScan.match(emailRegex) || [];
   for (const raw of matches) {
     const clean = raw.trim().toLowerCase().replace(/[.,;:)>\]]+$/, '');
     if (clean.length > 6 && clean.length < 75) {
@@ -204,6 +247,7 @@ function detectTechAndSignals(html, $) {
     const href = ($(el).attr('href') || '').trim();
     if (
       href.includes('wa.me/') ||
+      href.includes('wa.link/') ||
       href.includes('api.whatsapp.com') ||
       href.includes('whatsapp://') ||
       href.includes('web.whatsapp.com')
@@ -213,9 +257,26 @@ function detectTechAndSignals(html, $) {
     }
   });
 
+  const waPluginMarkers = [
+    'joinchat',
+    'ht-ctc',
+    'qlwapp',
+    'floating-wpp',
+    'whatsapp-widget',
+    'whatsapp-button',
+    'whatsapp-float',
+    'wa-chat-box',
+    'chaty-widget',
+    'getbutton.io',
+    'callbell'
+  ];
+
   if (
     !hasWhatsappWidget &&
-    (lower.includes('wa.me/') || lower.includes('api.whatsapp.com/send'))
+    (lower.includes('wa.me/') ||
+      lower.includes('wa.link/') ||
+      lower.includes('api.whatsapp.com/send') ||
+      waPluginMarkers.some((marker) => lower.includes(marker)))
   ) {
     hasWhatsappWidget = true;
   }
@@ -403,22 +464,32 @@ async function auditBusinessWebsite(rawUrl) {
     if (h.includes('instagram.com')) baseAudit.socialLinks.instagram = classification.normalizedUrl;
     if (h.includes('facebook.com') || h.includes('fb.com'))
       baseAudit.socialLinks.facebook = classification.normalizedUrl;
-    if (h.includes('wa.me') || h.includes('whatsapp.com')) {
+    if (h.includes('wa.me') || h.includes('whatsapp.com') || h.includes('wa.link')) {
       baseAudit.hasWhatsappWidget = true;
+      const numMatch = classification.normalizedUrl.match(/(?:wa\.me\/|phone=)(\+?\d{10,13})/);
+      if (numMatch) baseAudit.whatsappWebNumber = numMatch[1].replace(/\D/g, '');
     }
     baseAudit.cms = `Red Social (${classification.hostname})`;
     return baseAudit;
   }
 
+  const isShortener = SHORTENER_DOMAINS.some(
+    (d) => classification.hostname === d || classification.hostname.endsWith('.' + d)
+  );
+
   // Verificar MX y descargar HTML en paralelo
-  const [fetchResult, mxResult] = await Promise.all([
+  const [fetchResult, initialMxResult] = await Promise.all([
     fetchHtmlWithFallback(classification.normalizedUrl),
-    classification.type === 'CUSTOM_DOMAIN'
+    classification.type === 'CUSTOM_DOMAIN' && !isShortener
       ? checkMxRecords(classification.rootDomain)
+      : isShortener
+      ? Promise.resolve({ hasMx: false, mxProvider: 'Enlace acortado' })
       : Promise.resolve({ hasMx: false, mxProvider: 'Subdominio gratuito' })
   ]);
 
-  // Si era un acortador (bit.ly, etc.) y redirigió a WhatsApp/Instagram/Directorio, reclasificar
+  let mxResult = initialMxResult;
+
+  // Si era un acortador (bit.ly, etc.) y redirigió a WhatsApp/Instagram/Directorio/Dominio real, reclasificar
   if (fetchResult.finalUrl && fetchResult.finalUrl !== classification.normalizedUrl) {
     const redirectedClass = classifyWebsiteUrl(fetchResult.finalUrl);
     if (redirectedClass.type === 'SOCIAL_ONLY' || redirectedClass.type === 'FREE_BUILDER') {
@@ -426,9 +497,22 @@ async function auditBusinessWebsite(rawUrl) {
       baseAudit.normalizedUrl = redirectedClass.normalizedUrl;
       baseAudit.hostname = redirectedClass.hostname;
       if (redirectedClass.type === 'SOCIAL_ONLY') {
+        const rh = redirectedClass.hostname;
+        if (rh.includes('instagram.com')) baseAudit.socialLinks.instagram = redirectedClass.normalizedUrl;
+        if (rh.includes('facebook.com') || rh.includes('fb.com'))
+          baseAudit.socialLinks.facebook = redirectedClass.normalizedUrl;
+        if (rh.includes('wa.me') || rh.includes('whatsapp.com') || rh.includes('wa.link')) {
+          baseAudit.hasWhatsappWidget = true;
+          const numMatch = redirectedClass.normalizedUrl.match(/(?:wa\.me\/|phone=)(\+?\d{10,13})/);
+          if (numMatch) baseAudit.whatsappWebNumber = numMatch[1].replace(/\D/g, '');
+        }
         baseAudit.cms = `Red Social (${redirectedClass.hostname})`;
         return baseAudit;
       }
+    } else if (isShortener && redirectedClass.type === 'CUSTOM_DOMAIN') {
+      baseAudit.normalizedUrl = redirectedClass.normalizedUrl;
+      baseAudit.hostname = redirectedClass.hostname;
+      mxResult = await checkMxRecords(redirectedClass.rootDomain);
     }
   }
 
@@ -497,5 +581,7 @@ async function auditBusinessWebsite(rawUrl) {
 
 module.exports = {
   classifyWebsiteUrl,
-  auditBusinessWebsite
+  auditBusinessWebsite,
+  extractEmailsFromHtml,
+  FREE_BUILDER_DOMAINS
 };

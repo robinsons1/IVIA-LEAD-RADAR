@@ -5,9 +5,12 @@ const {
   loadLeads,
   upsertLead,
   updateLeadCrm,
+  updateLeadFull,
+  rescoreAndMigrateLeads,
   deleteLead,
   clearLeads,
-  loadProgress
+  loadProgress,
+  toLocalDateString
 } = require('./storage/db');
 const {
   runLeadPipeline,
@@ -40,21 +43,31 @@ function broadcastEvent(payload) {
 }
 
 function computeStats(leads) {
+  const today = toLocalDateString(new Date());
   return {
     total: leads.length,
     highPriority: leads.filter((l) => l.priority === 'ALTA').length,
+    dueFollowUp: leads.filter(
+      (l) =>
+        l.nextFollowUpAt &&
+        l.nextFollowUpAt <= today &&
+        ['contactado', 'interesado', 'propuesta'].includes(l.crmStatus)
+    ).length,
     noWebsite: leads.filter((l) => l.primaryOpportunity === 'NO_WEBSITE').length,
     socialOnly: leads.filter((l) => l.primaryOpportunity === 'SOCIAL_ONLY').length,
     brokenOrInsecure: leads.filter(
       (l) =>
         l.primaryOpportunity === 'BROKEN_WEB' ||
         l.primaryOpportunity === 'NO_SSL' ||
-        (l.audit && l.audit.urlType === 'CUSTOM_DOMAIN' && (!l.audit.reachable || !l.audit.hasValidSsl))
+        (l.audit &&
+          (l.audit.urlType === 'CUSTOM_DOMAIN' || l.audit.urlType === 'FREE_BUILDER') &&
+          (!l.audit.reachable || !l.audit.hasValidSsl))
     ).length,
     genericEmail: leads.filter(
       (l) =>
         l.primaryOpportunity === 'GENERIC_EMAIL' ||
-        (l.audit?.genericEmails && l.audit.genericEmails.length > 0)
+        ((l.audit?.genericEmails?.length || 0) > 0 &&
+          (l.audit?.corporateEmails?.length || 0) === 0)
     ).length,
     withWhatsappMobile: leads.filter((l) => l.isWhatsappMobile).length,
     contacted: leads.filter((l) => l.crmStatus && l.crmStatus !== 'nuevo').length
@@ -186,6 +199,39 @@ app.patch('/api/leads/:id', (req, res) => {
   res.json({ ok: true, lead: updated });
 });
 
+// Re-auditar en vivo un prospecto existente (sin perder CRM ni historial)
+app.post('/api/leads/:id/reaudit', async (req, res) => {
+  try {
+    const leads = loadLeads();
+    const existing = leads.find((l) => l.id === req.params.id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Prospecto no encontrado' });
+    }
+
+    const freshAudit = await auditBusinessWebsite(existing.website || '');
+    const scored = scoreAndBuildPitch(existing, freshAudit);
+    const updated = updateLeadFull(existing.id, {
+      ...scored,
+      audit: freshAudit
+    });
+
+    broadcastEvent({ type: 'lead', lead: updated, isNew: false, job: getJobStatus() });
+    res.json({ ok: true, lead: updated });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Recalcular score, cadencias y campos de seguimiento sobre la base local
+app.post('/api/leads/rescore', (req, res) => {
+  try {
+    const result = rescoreAndMigrateLeads();
+    res.json({ ok: true, total: result.total, stats: computeStats(result.leads), leads: result.leads });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Eliminar un prospecto
 app.delete('/api/leads/:id', (req, res) => {
   const deleted = deleteLead(req.params.id);
@@ -224,6 +270,7 @@ app.get('/api/export/csv', (req, res) => {
 });
 
 if (require.main === module) {
+  rescoreAndMigrateLeads({ onlyIfNeeded: true });
   app.listen(PORT, () => {
     console.log('\n══════════════════════════════════════════════════════════════');
     console.log(' 🚀 IVIA LEAD RADAR — DASHBOARD & MOTOR DE PROSPECCIÓN ACTIVO');

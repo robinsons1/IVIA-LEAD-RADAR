@@ -16,6 +16,36 @@ function ensureDirs() {
 }
 
 /**
+ * Formatea una fecha en YYYY-MM-DD usando la hora LOCAL (evita desfase UTC nocturno en Colombia)
+ */
+function toLocalDateString(dateInput = new Date(), addDays = 0) {
+  const base = dateInput instanceof Date ? new Date(dateInput.getTime()) : new Date(dateInput);
+  if (Number.isNaN(base.getTime())) return null;
+  if (addDays) {
+    base.setDate(base.getDate() + Number(addDays));
+  }
+  const yyyy = base.getFullYear();
+  const mm = String(base.getMonth() + 1).padStart(2, '0');
+  const dd = String(base.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+/**
+ * Cadencia 0 - 3 - 7 - 15:
+ * tras toque 1 -> +3d (día 3)
+ * tras toque 2 -> +4d (día 7)
+ * tras toque 3 -> +8d (día 15)
+ * tras toque 4+ -> null (cierre)
+ */
+function getDefaultFollowUpDays(followUpCount) {
+  const count = Number(followUpCount) || 0;
+  if (count <= 1) return 3;
+  if (count === 2) return 4;
+  if (count === 3) return 8;
+  return null;
+}
+
+/**
  * Escritura atómica para evitar corrupción si el proceso se interrumpe (Ctrl+C / apagado)
  */
 function atomicWriteJson(filePath, data) {
@@ -130,7 +160,13 @@ function upsertLead(leadData) {
       dedupKey: key,
       crmStatus: existing.crmStatus || 'nuevo',
       notes: existing.notes || '',
+      firstContactedAt: existing.firstContactedAt || existing.lastContactedAt || null,
       lastContactedAt: existing.lastContactedAt || null,
+      followUpCount: typeof existing.followUpCount === 'number' ? existing.followUpCount : 0,
+      nextFollowUpAt: existing.nextFollowUpAt !== undefined ? existing.nextFollowUpAt : null,
+      contactHistory: Array.isArray(existing.contactHistory) ? existing.contactHistory : [],
+      customPitch: existing.customPitch,
+      auditedAt: leadData.auditedAt || now,
       createdAt: existing.createdAt || now,
       updatedAt: now
     };
@@ -143,7 +179,12 @@ function upsertLead(leadData) {
       dedupKey: key,
       crmStatus: 'nuevo',
       notes: '',
+      firstContactedAt: null,
       lastContactedAt: null,
+      followUpCount: 0,
+      nextFollowUpAt: null,
+      contactHistory: [],
+      auditedAt: now,
       createdAt: now,
       updatedAt: now,
       ...leadData
@@ -159,19 +200,225 @@ function updateLeadCrm(id, updates) {
   const idx = leads.findIndex((l) => l.id === id);
   if (idx === -1) return null;
 
+  const existing = leads[idx];
+  const nowIso = new Date().toISOString();
   const allowed = {};
+
   if (typeof updates.crmStatus === 'string') allowed.crmStatus = updates.crmStatus;
   if (typeof updates.notes === 'string') allowed.notes = updates.notes;
+  if (updates.firstContactedAt !== undefined) allowed.firstContactedAt = updates.firstContactedAt;
   if (updates.lastContactedAt !== undefined) allowed.lastContactedAt = updates.lastContactedAt;
+  if (typeof updates.followUpCount === 'number') allowed.followUpCount = updates.followUpCount;
+  if (updates.nextFollowUpAt !== undefined) allowed.nextFollowUpAt = updates.nextFollowUpAt;
+  if (Array.isArray(updates.contactHistory)) allowed.contactHistory = updates.contactHistory;
   if (typeof updates.customPitch === 'string') allowed.customPitch = updates.customPitch;
 
+  if (updates.recordContact && typeof updates.recordContact === 'object') {
+    const rc = updates.recordContact;
+    const prevCount = typeof existing.followUpCount === 'number' ? existing.followUpCount : 0;
+    const stageNum = Number(rc.stage) || prevCount + 1;
+    const newCount = Math.max(prevCount + 1, stageNum);
+    const history = Array.isArray(existing.contactHistory) ? [...existing.contactHistory] : [];
+
+    history.push({
+      date: nowIso,
+      stage: stageNum,
+      channel: rc.channel || 'whatsapp',
+      preview: String(rc.message || '').trim().slice(0, 140)
+    });
+
+    allowed.firstContactedAt = existing.firstContactedAt || existing.lastContactedAt || nowIso;
+    allowed.lastContactedAt = nowIso;
+    allowed.followUpCount = newCount;
+    allowed.contactHistory = history.slice(-20);
+
+    const currentStatus = allowed.crmStatus || existing.crmStatus || 'nuevo';
+    if (currentStatus === 'nuevo') {
+      allowed.crmStatus = 'contactado';
+    }
+
+    if (rc.nextFollowUpAt !== undefined) {
+      allowed.nextFollowUpAt = rc.nextFollowUpAt || null;
+    } else if (typeof rc.nextFollowUpDays === 'number' && rc.nextFollowUpDays > 0) {
+      allowed.nextFollowUpAt = toLocalDateString(new Date(), rc.nextFollowUpDays);
+    } else if (updates.nextFollowUpAt === undefined) {
+      const autoDays = getDefaultFollowUpDays(newCount);
+      allowed.nextFollowUpAt = autoDays ? toLocalDateString(new Date(), autoDays) : null;
+    }
+  } else if (typeof updates.crmStatus === 'string') {
+    if (updates.crmStatus === 'contactado' && !existing.lastContactedAt) {
+      allowed.firstContactedAt = existing.firstContactedAt || nowIso;
+      allowed.lastContactedAt = nowIso;
+      allowed.followUpCount = Math.max(1, existing.followUpCount || 0);
+      if (updates.nextFollowUpAt === undefined && !existing.nextFollowUpAt) {
+        allowed.nextFollowUpAt = toLocalDateString(new Date(), 3);
+      }
+    } else if (
+      (updates.crmStatus === 'cliente' || updates.crmStatus === 'descartado') &&
+      updates.nextFollowUpAt === undefined
+    ) {
+      allowed.nextFollowUpAt = null;
+    }
+  }
+
   leads[idx] = {
-    ...leads[idx],
+    ...existing,
     ...allowed,
-    updatedAt: new Date().toISOString()
+    updatedAt: nowIso
   };
   saveLeads(leads);
   return leads[idx];
+}
+
+function updateLeadFull(id, freshLeadData) {
+  const leads = loadLeads();
+  const idx = leads.findIndex((l) => l.id === id);
+  if (idx === -1) return null;
+
+  const existing = leads[idx];
+  const nowIso = new Date().toISOString();
+
+  leads[idx] = {
+    ...existing,
+    ...freshLeadData,
+    id: existing.id,
+    dedupKey: existing.dedupKey,
+    crmStatus: existing.crmStatus || 'nuevo',
+    notes: existing.notes || '',
+    firstContactedAt: existing.firstContactedAt || existing.lastContactedAt || null,
+    lastContactedAt: existing.lastContactedAt || null,
+    followUpCount: typeof existing.followUpCount === 'number' ? existing.followUpCount : 0,
+    nextFollowUpAt: existing.nextFollowUpAt !== undefined ? existing.nextFollowUpAt : null,
+    contactHistory: Array.isArray(existing.contactHistory) ? existing.contactHistory : [],
+    customPitch: existing.customPitch,
+    createdAt: existing.createdAt || nowIso,
+    auditedAt: nowIso,
+    updatedAt: nowIso
+  };
+
+  saveLeads(leads);
+  return leads[idx];
+}
+
+function cleanStoredAudit(audit, freeBuilderDomains) {
+  if (!audit || typeof audit !== 'object') return audit;
+  const cleaned = { ...audit };
+
+  const ignorePatterns = [
+    /ejemplo\.com/i,
+    /ejemplo\./i,
+    /sample\./i,
+    /yourdomain/i,
+    /suempresa/i,
+    /tunegocio/i,
+    /noreply@/i,
+    /no-reply@/i,
+    /u003[ce]/i,
+    /^u00[0-9a-f]{2}/i
+  ];
+  const filterEmails = (arr) =>
+    Array.isArray(arr)
+      ? arr.filter((e) => e && !ignorePatterns.some((re) => re.test(String(e))))
+      : [];
+
+  cleaned.allEmails = filterEmails(cleaned.allEmails);
+  cleaned.genericEmails = filterEmails(cleaned.genericEmails);
+  cleaned.corporateEmails = filterEmails(cleaned.corporateEmails);
+
+  if (cleaned.hostname && Array.isArray(freeBuilderDomains)) {
+    const h = String(cleaned.hostname).toLowerCase();
+    const isFree = freeBuilderDomains.some((d) => h === d || h.endsWith('.' + d));
+    if (isFree) {
+      cleaned.urlType = 'FREE_BUILDER';
+      cleaned.hasMxRecords = false;
+      cleaned.mxProvider = 'Subdominio gratuito';
+    }
+  }
+
+  return cleaned;
+}
+
+/**
+ * Recalcula score, mensajes y campos de seguimiento sobre los leads actuales sin perder datos CRM
+ */
+function rescoreAndMigrateLeads(options = {}) {
+  const leads = loadLeads();
+  if (leads.length === 0) return { total: 0, migrated: 0, leads };
+
+  if (options.onlyIfNeeded) {
+    const needsMigration = leads.some(
+      (l) =>
+        !l.cleanName ||
+        typeof l.followUpCount !== 'number' ||
+        !l.pitches?.cadence ||
+        !l.pitches?.replies
+    );
+    if (!needsMigration) {
+      return { total: leads.length, migrated: 0, leads };
+    }
+  }
+
+  const { scoreAndBuildPitch } = require('../scraper/leadScorer');
+  const { FREE_BUILDER_DOMAINS } = require('../scraper/websiteAuditor');
+
+  const updatedLeads = leads.map((lead) => {
+    const cleanedAudit = cleanStoredAudit(lead.audit, FREE_BUILDER_DOMAINS);
+    const scored = scoreAndBuildPitch(lead, cleanedAudit);
+
+    const status = lead.crmStatus || 'nuevo';
+    const isContacted = status !== 'nuevo';
+    const refTimestamp = lead.lastContactedAt || (isContacted ? lead.updatedAt || lead.createdAt : null);
+
+    const firstContactedAt =
+      lead.firstContactedAt || (isContacted ? refTimestamp : null);
+
+    const followUpCount =
+      typeof lead.followUpCount === 'number'
+        ? lead.followUpCount
+        : isContacted && refTimestamp
+        ? 1
+        : 0;
+
+    let contactHistory = Array.isArray(lead.contactHistory) ? [...lead.contactHistory] : [];
+    if (contactHistory.length === 0 && isContacted && refTimestamp) {
+      contactHistory = [
+        {
+          date: refTimestamp,
+          stage: 1,
+          channel: 'whatsapp',
+          preview: String(lead.customPitch || lead.pitches?.whatsappDirect || '')
+            .trim()
+            .slice(0, 140)
+        }
+      ];
+    }
+
+    let nextFollowUpAt = lead.nextFollowUpAt;
+    if (nextFollowUpAt === undefined) {
+      if (['contactado', 'interesado', 'propuesta'].includes(status) && refTimestamp) {
+        nextFollowUpAt = toLocalDateString(new Date(refTimestamp), 3);
+      } else {
+        nextFollowUpAt = null;
+      }
+    }
+
+    return {
+      ...lead,
+      ...scored,
+      audit: cleanedAudit,
+      crmStatus: status,
+      notes: lead.notes || '',
+      firstContactedAt,
+      lastContactedAt: lead.lastContactedAt || (isContacted ? refTimestamp : null),
+      followUpCount,
+      nextFollowUpAt,
+      contactHistory,
+      auditedAt: lead.auditedAt || lead.updatedAt || lead.createdAt || new Date().toISOString()
+    };
+  });
+
+  saveLeads(updatedLeads);
+  return { total: updatedLeads.length, migrated: updatedLeads.length, leads: updatedLeads };
 }
 
 function deleteLead(id) {
@@ -222,10 +469,14 @@ module.exports = {
   ensureDirs,
   logMessage,
   normalizeColombianPhone,
+  toLocalDateString,
+  getDefaultFollowUpDays,
   loadLeads,
   saveLeads,
   upsertLead,
   updateLeadCrm,
+  updateLeadFull,
+  rescoreAndMigrateLeads,
   deleteLead,
   clearLeads,
   loadProgress,

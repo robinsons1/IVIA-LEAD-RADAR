@@ -1,6 +1,8 @@
 let allLeads = [];
 let activeFilter = 'ALL';
 let currentModalLead = null;
+let currentStage = 1;
+let userEditedFollowUpDate = false;
 
 const els = {
   scrapeForm: document.getElementById('scrape-form'),
@@ -25,6 +27,9 @@ const els = {
   btnClearAll: document.getElementById('btn-clear-all'),
   // Stats
   statTotal: document.getElementById('stat-total'),
+  statDueFollowUp: document.getElementById('stat-due-followup'),
+  badgeDueFollowUp: document.getElementById('badge-due-followup'),
+  kpiCardDue: document.getElementById('kpi-card-due'),
   statNoWeb: document.getElementById('stat-no-website'),
   statSocial: document.getElementById('stat-social-only'),
   statBroken: document.getElementById('stat-broken'),
@@ -33,13 +38,18 @@ const els = {
   // Modal Pitch
   pitchModal: document.getElementById('pitch-modal'),
   btnCloseModal: document.getElementById('btn-close-modal'),
+  btnReauditLead: document.getElementById('btn-reaudit-lead'),
   modalLeadName: document.getElementById('modal-lead-name'),
   modalLeadCategory: document.getElementById('modal-lead-category'),
   modalAuditGrid: document.getElementById('modal-audit-grid'),
   modalPitchTextarea: document.getElementById('modal-pitch-textarea'),
+  modalFollowUpDate: document.getElementById('modal-followup-date'),
+  btnGcalReminder: document.getElementById('btn-gcal-reminder'),
+  modalContactHistory: document.getElementById('modal-contact-history'),
   modalNotesInput: document.getElementById('modal-notes-input'),
   modalCrmSelect: document.getElementById('modal-crm-select'),
   btnCopyPitch: document.getElementById('btn-copy-pitch'),
+  btnSendEmailModal: document.getElementById('btn-send-email-modal'),
   btnSaveLeadModal: document.getElementById('btn-save-lead-modal'),
   btnSendWhatsappModal: document.getElementById('btn-send-whatsapp-modal'),
   // Modal Single Audit
@@ -55,6 +65,81 @@ function escapeHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function toLocalDateStr(dateInput = new Date(), addDays = 0) {
+  const d = dateInput instanceof Date ? new Date(dateInput.getTime()) : new Date(dateInput);
+  if (Number.isNaN(d.getTime())) return '';
+  if (addDays) d.setDate(d.getDate() + Number(addDays));
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function getLocalTodayStr() {
+  return toLocalDateStr(new Date(), 0);
+}
+
+function diffDaysFromToday(dateStr) {
+  if (!dateStr) return null;
+  const parts = String(dateStr).split('-').map(Number);
+  if (parts.length !== 3 || parts.some(Number.isNaN)) return null;
+  const target = new Date(parts[0], parts[1] - 1, parts[2]);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((target - today) / (1000 * 60 * 60 * 24));
+}
+
+function formatShortDate(dateStr) {
+  if (!dateStr) return '';
+  const parts = String(dateStr).split('-').map(Number);
+  if (parts.length !== 3) return dateStr;
+  const d = new Date(parts[0], parts[1] - 1, parts[2]);
+  return d.toLocaleDateString('es-CO', { day: 'numeric', month: 'short' });
+}
+
+function getBrowserGreeting() {
+  const h = new Date().getHours();
+  if (h >= 5 && h < 12) return 'buenos días';
+  if (h >= 12 && h < 19) return 'buenas tardes';
+  return 'buenas noches';
+}
+
+function adaptGreeting(text) {
+  if (!text) return '';
+  const g = getBrowserGreeting();
+  return String(text)
+    .replace(/^Hola,\s+(?:buenos días|buenas tardes|buenas noches)\./i, `Hola, ${g}.`)
+    .replace(/^Hola de nuevo,\s+(?:buenos días|buenas tardes|buenas noches)\./i, `Hola de nuevo, ${g}.`);
+}
+
+function isLeadDueFollowUp(lead, todayStr = getLocalTodayStr()) {
+  return Boolean(
+    lead.nextFollowUpAt &&
+      lead.nextFollowUpAt <= todayStr &&
+      ['contactado', 'interesado', 'propuesta'].includes(lead.crmStatus)
+  );
+}
+
+function isLeadBrokenOrInsecure(lead) {
+  return (
+    lead.primaryOpportunity === 'BROKEN_WEB' ||
+    lead.primaryOpportunity === 'NO_SSL' ||
+    Boolean(
+      lead.audit &&
+        (lead.audit.urlType === 'CUSTOM_DOMAIN' || lead.audit.urlType === 'FREE_BUILDER') &&
+        (!lead.audit.reachable || !lead.audit.hasValidSsl)
+    )
+  );
+}
+
+function isLeadGenericEmailOnly(lead) {
+  return (
+    lead.primaryOpportunity === 'GENERIC_EMAIL' ||
+    ((lead.audit?.genericEmails?.length || 0) > 0 &&
+      (lead.audit?.corporateEmails?.length || 0) === 0)
+  );
 }
 
 function appendConsoleLog(level, message) {
@@ -87,20 +172,26 @@ function updateJobStatusUI(job) {
 }
 
 function renderStats() {
+  const today = getLocalTodayStr();
+  const dueCount = allLeads.filter((l) => isLeadDueFollowUp(l, today)).length;
+
   els.statTotal.textContent = allLeads.length;
+  els.statDueFollowUp.textContent = dueCount;
+
+  if (dueCount > 0) {
+    els.kpiCardDue.classList.add('has-due');
+    els.badgeDueFollowUp.className = 'kpi-badge amber';
+    els.badgeDueFollowUp.textContent = 'Urgente';
+  } else {
+    els.kpiCardDue.classList.remove('has-due');
+    els.badgeDueFollowUp.className = 'kpi-badge emerald';
+    els.badgeDueFollowUp.textContent = 'Al día';
+  }
+
   els.statNoWeb.textContent = allLeads.filter((l) => l.primaryOpportunity === 'NO_WEBSITE').length;
   els.statSocial.textContent = allLeads.filter((l) => l.primaryOpportunity === 'SOCIAL_ONLY').length;
-  els.statBroken.textContent = allLeads.filter(
-    (l) =>
-      l.primaryOpportunity === 'BROKEN_WEB' ||
-      l.primaryOpportunity === 'NO_SSL' ||
-      (l.audit && l.audit.urlType === 'CUSTOM_DOMAIN' && (!l.audit.reachable || !l.audit.hasValidSsl))
-  ).length;
-  els.statGmail.textContent = allLeads.filter(
-    (l) =>
-      l.primaryOpportunity === 'GENERIC_EMAIL' ||
-      (l.audit?.genericEmails && l.audit.genericEmails.length > 0)
-  ).length;
+  els.statBroken.textContent = allLeads.filter((l) => isLeadBrokenOrInsecure(l)).length;
+  els.statGmail.textContent = allLeads.filter((l) => isLeadGenericEmailOnly(l)).length;
   els.statWhatsapp.textContent = allLeads.filter((l) => l.isWhatsappMobile).length;
 }
 
@@ -108,41 +199,29 @@ function getFilteredLeads() {
   const search = (els.filterSearch.value || '').trim().toLowerCase();
   const crmFilter = els.filterCrm.value;
   const sortBy = els.filterSort.value;
+  const today = getLocalTodayStr();
 
   const filtered = allLeads.filter((lead) => {
-    // Filtro por tarjeta KPI
+    if (activeFilter === 'DUE_FOLLOWUP' && !isLeadDueFollowUp(lead, today)) return false;
     if (activeFilter === 'NO_WEBSITE' && lead.primaryOpportunity !== 'NO_WEBSITE') return false;
     if (activeFilter === 'SOCIAL_ONLY' && lead.primaryOpportunity !== 'SOCIAL_ONLY') return false;
-    if (
-      activeFilter === 'BROKEN_OR_INSECURE' &&
-      lead.primaryOpportunity !== 'BROKEN_WEB' &&
-      lead.primaryOpportunity !== 'NO_SSL' &&
-      !(lead.audit && lead.audit.urlType === 'CUSTOM_DOMAIN' && (!lead.audit.reachable || !lead.audit.hasValidSsl))
-    ) {
-      return false;
-    }
-    if (
-      activeFilter === 'GENERIC_EMAIL' &&
-      lead.primaryOpportunity !== 'GENERIC_EMAIL' &&
-      !(lead.audit?.genericEmails && lead.audit.genericEmails.length > 0)
-    ) {
-      return false;
-    }
+    if (activeFilter === 'BROKEN_OR_INSECURE' && !isLeadBrokenOrInsecure(lead)) return false;
+    if (activeFilter === 'GENERIC_EMAIL' && !isLeadGenericEmailOnly(lead)) return false;
     if (activeFilter === 'WHATSAPP_MOBILE' && !lead.isWhatsappMobile) return false;
 
-    // Filtro por Estado CRM
     if (crmFilter !== 'ALL' && (lead.crmStatus || 'nuevo') !== crmFilter) return false;
 
-    // Filtro por texto
     if (search) {
       const haystack = [
         lead.name,
+        lead.cleanName,
         lead.category,
         lead.city,
         lead.address,
         lead.phone,
         lead.website,
         lead.primaryLabel,
+        lead.notes,
         ...(lead.audit?.allEmails || [])
       ]
         .join(' ')
@@ -154,6 +233,17 @@ function getFilteredLeads() {
   });
 
   filtered.sort((a, b) => {
+    if (sortBy === 'followup_due') {
+      const aDue = isLeadDueFollowUp(a, today) ? 1 : 0;
+      const bDue = isLeadDueFollowUp(b, today) ? 1 : 0;
+      if (aDue !== bDue) return bDue - aDue;
+      if (a.nextFollowUpAt && b.nextFollowUpAt) {
+        return a.nextFollowUpAt.localeCompare(b.nextFollowUpAt);
+      }
+      if (a.nextFollowUpAt) return -1;
+      if (b.nextFollowUpAt) return 1;
+      return (b.score || 0) - (a.score || 0);
+    }
     if (sortBy === 'reviews_desc') return (b.reviewsCount || 0) - (a.reviewsCount || 0);
     if (sortBy === 'recent') return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
     return (b.score || 0) - (a.score || 0);
@@ -162,9 +252,36 @@ function getFilteredLeads() {
   return filtered;
 }
 
+function buildFollowUpBadgeHtml(lead) {
+  const count = lead.followUpCount || 0;
+  const nextTouch = Math.min(4, count + 1);
+  const diff = diffDaysFromToday(lead.nextFollowUpAt);
+
+  if (
+    lead.nextFollowUpAt &&
+    ['contactado', 'interesado', 'propuesta'].includes(lead.crmStatus) &&
+    diff !== null
+  ) {
+    if (diff < 0) {
+      return `<div class="followup-pill overdue">⚠️ Vencido hace ${Math.abs(diff)}d · T${nextTouch}</div>`;
+    }
+    if (diff === 0) {
+      return `<div class="followup-pill due-today">⏰ Hoy toca Toque ${nextTouch}</div>`;
+    }
+    return `<div class="followup-pill upcoming">Toque ${count} · en ${diff}d (${escapeHtml(formatShortDate(lead.nextFollowUpAt))})</div>`;
+  }
+
+  if (count > 0 && lead.crmStatus === 'contactado') {
+    return `<div class="followup-pill done">✓ ${count} ${count === 1 ? 'toque' : 'toques'}</div>`;
+  }
+
+  return '';
+}
+
 function renderTable() {
   renderStats();
   const list = getFilteredLeads();
+  const today = getLocalTodayStr();
   els.resultsCounter.textContent = `Mostrando ${list.length} de ${allLeads.length} prospectos`;
 
   if (list.length === 0) {
@@ -186,6 +303,11 @@ function renderTable() {
         .slice(0, 4)
         .map((t) => `<span class="sub-tag">${escapeHtml(t)}</span>`)
         .join('');
+
+      const isDue = isLeadDueFollowUp(lead, today);
+      const nextTouch = Math.min(4, (lead.followUpCount || 0) + 1);
+      const actionBtnClass = isDue ? 'btn-followup' : 'btn-whatsapp';
+      const actionBtnText = isDue ? `🔔 Seguim. T${nextTouch}` : '💬 Pitch / WhatsApp';
 
       return `
         <tr data-id="${escapeHtml(lead.id)}">
@@ -251,11 +373,12 @@ function renderTable() {
               <option value="cliente" ${lead.crmStatus === 'cliente' ? 'selected' : ''}>✅ Cliente</option>
               <option value="descartado" ${lead.crmStatus === 'descartado' ? 'selected' : ''}>❌ Descartado</option>
             </select>
+            ${buildFollowUpBadgeHtml(lead)}
           </td>
           <td style="text-align:right;">
             <div class="action-group">
-              <button type="button" class="btn btn-whatsapp btn-sm" data-action="open-pitch" data-id="${escapeHtml(lead.id)}">
-                💬 Pitch / WhatsApp
+              <button type="button" class="btn ${actionBtnClass} btn-sm" data-action="open-pitch" data-id="${escapeHtml(lead.id)}">
+                ${actionBtnText}
               </button>
               <button type="button" class="btn btn-ghost-danger btn-sm" data-action="delete-lead" data-id="${escapeHtml(lead.id)}" title="Eliminar">
                 &times;
@@ -303,16 +426,117 @@ function connectSse() {
   };
 }
 
-//Abrir modal de Pitch & Auditoría
+function getStagePitchText(lead, stage) {
+  const cadence = lead.pitches?.cadence || {};
+  const map = {
+    1: cadence.stage1 || lead.pitches?.whatsappDirect || '',
+    2: cadence.stage2 || '',
+    3: cadence.stage3 || lead.pitches?.whatsappAutomation || '',
+    4: cadence.stage4 || ''
+  };
+  return adaptGreeting(map[stage] || map[1] || '');
+}
+
+function setActiveStageTab(stage) {
+  currentStage = stage;
+  document.querySelectorAll('.pitch-tab').forEach((tab) => {
+    tab.classList.toggle('active', Number(tab.dataset.stage) === stage);
+  });
+  document.querySelectorAll('.reply-chip').forEach((chip) => chip.classList.remove('active'));
+  els.btnSendWhatsappModal.querySelector('span').textContent = `Enviar por WhatsApp (Toque ${stage}) →`;
+}
+
+function updateModalGcalHref() {
+  if (!currentModalLead) return;
+  const name = currentModalLead.cleanName || currentModalLead.name;
+  const targetDateStr = els.modalFollowUpDate.value || toLocalDateStr(new Date(), 3);
+  const compactDate = targetDateStr.replace(/-/g, '');
+  const nextTouch = Math.min(4, (currentModalLead.followUpCount || 0) + 1);
+
+  const dParts = targetDateStr.split('-').map(Number);
+  let endCompact = compactDate;
+  if (dParts.length === 3) {
+    const endD = new Date(dParts[0], dParts[1] - 1, dParts[2] + 1);
+    endCompact = toLocalDateStr(endD, 0).replace(/-/g, '');
+  }
+
+  const details = [
+    `Prospecto: ${name}`,
+    `Teléfono/WA: ${currentModalLead.phone || 'N/A'}`,
+    `Diagnóstico: ${currentModalLead.primaryLabel || ''}`,
+    `Toque sugerido: #${nextTouch}`,
+    `Notas: ${els.modalNotesInput.value || currentModalLead.notes || 'Ninguna'}`,
+    `Abrir CRM local: http://localhost:3000`
+  ].join('\n');
+
+  const url =
+    `https://calendar.google.com/calendar/render?action=TEMPLATE` +
+    `&text=${encodeURIComponent(`Seguimiento IVIA (T${nextTouch}): ${name}`)}` +
+    `&dates=${compactDate}/${endCompact}` +
+    `&details=${encodeURIComponent(details)}`;
+
+  els.btnGcalReminder.href = url;
+}
+
+function updateModalChannelHrefs() {
+  if (!currentModalLead) return;
+  const text = els.modalPitchTextarea.value || '';
+  const phone = currentModalLead.phoneE164 || '';
+
+  if (phone) {
+    els.btnSendWhatsappModal.href = `https://wa.me/${phone}?text=${encodeURIComponent(text)}`;
+  } else {
+    els.btnSendWhatsappModal.href = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
+  }
+
+  const emails = currentModalLead.audit?.allEmails || [];
+  if (emails.length > 0) {
+    const subject =
+      currentModalLead.pitches?.emailSubject ||
+      `Consulta sobre ${currentModalLead.cleanName || currentModalLead.name}`;
+    els.btnSendEmailModal.href = `mailto:${encodeURIComponent(emails[0])}?subject=${encodeURIComponent(
+      subject
+    )}&body=${encodeURIComponent(text)}`;
+    els.btnSendEmailModal.classList.remove('hidden');
+  } else {
+    els.btnSendEmailModal.classList.add('hidden');
+  }
+}
+
+function getAuditFreshnessInfo(lead) {
+  const ref = lead.auditedAt || lead.createdAt;
+  if (!ref) return { label: 'Sin fecha', stale: false };
+  const days = Math.floor((Date.now() - new Date(ref).getTime()) / (1000 * 60 * 60 * 24));
+  if (days <= 0) return { label: 'Auditado hoy', stale: false };
+  if (days === 1) return { label: 'Auditado ayer', stale: false };
+  return { label: `Auditado hace ${days} días`, stale: days > 14 };
+}
+
+function renderContactHistory(lead) {
+  const history = Array.isArray(lead.contactHistory) ? lead.contactHistory : [];
+  if (history.length === 0) {
+    els.modalContactHistory.textContent = 'Historial: Sin contactos registrados todavía.';
+    return;
+  }
+  const items = history.slice(-4).map((h) => {
+    const localDay = formatShortDate(toLocalDateStr(new Date(h.date), 0));
+    const ch = h.channel === 'email' ? 'Correo' : 'WA';
+    return `T${h.stage || 1} (${ch} · ${localDay})`;
+  });
+  els.modalContactHistory.textContent = `Historial (${history.length}): ${items.join(' → ')}`;
+}
+
+// Abrir modal de Pitch, Cadencia & Auditoría
 function openPitchModal(leadId) {
   const lead = allLeads.find((l) => l.id === leadId);
   if (!lead) return;
   currentModalLead = lead;
 
-  els.modalLeadName.textContent = lead.name;
+  els.modalLeadName.textContent = lead.cleanName || lead.name;
   els.modalLeadCategory.textContent = `${lead.category || 'Empresa'} · ${lead.city || 'Colombia'} · Score ${lead.score}/100`;
 
   const audit = lead.audit || {};
+  const freshness = getAuditFreshnessInfo(lead);
   els.modalAuditGrid.innerHTML = `
     <div class="audit-item">
       <span class="k">Diagnóstico Principal</span>
@@ -343,34 +567,32 @@ function openPitchModal(leadId) {
       <span class="v">${escapeHtml(audit.mxProvider || 'Sin dominio propio')}</span>
     </div>
     <div class="audit-item">
-      <span class="k">Correos Encontrados</span>
-      <span class="v">${escapeHtml((audit.allEmails || []).join(', ') || 'Ninguno visible')}</span>
+      <span class="k">Correos / Frescura</span>
+      <span class="v ${freshness.stale ? 'audit-stale' : ''}">${escapeHtml(
+        (audit.allEmails || []).join(', ') || 'Sin correo'
+      )} · ${escapeHtml(freshness.label)}</span>
     </div>
   `;
 
-  document.querySelectorAll('.pitch-tab').forEach((b) => b.classList.remove('active'));
-  document.querySelector('.pitch-tab[data-pitch-type="direct"]').classList.add('active');
+  const count = lead.followUpCount || 0;
+  const defaultStage = count === 0 ? 1 : count === 1 ? 2 : count === 2 ? 3 : 4;
+  setActiveStageTab(defaultStage);
 
   els.modalPitchTextarea.value =
-    lead.customPitch || lead.pitches?.whatsappDirect || '';
+    defaultStage === 1 && lead.customPitch && count === 0
+      ? lead.customPitch
+      : getStagePitchText(lead, defaultStage);
+
+  els.modalFollowUpDate.value = lead.nextFollowUpAt || '';
+  userEditedFollowUpDate = false;
+
   els.modalNotesInput.value = lead.notes || '';
   els.modalCrmSelect.value = lead.crmStatus || 'nuevo';
+  renderContactHistory(lead);
+  updateModalChannelHrefs();
+  updateModalGcalHref();
 
-  updateModalWhatsappHref();
   els.pitchModal.classList.remove('hidden');
-}
-
-function updateModalWhatsappHref() {
-  if (!currentModalLead) return;
-  const text = els.modalPitchTextarea.value || '';
-  const phone = currentModalLead.phoneE164 || '';
-  if (phone) {
-    els.btnSendWhatsappModal.href = `https://wa.me/${phone}?text=${encodeURIComponent(text)}`;
-    els.btnSendWhatsappModal.classList.remove('hidden');
-  } else {
-    // Permite abrir WhatsApp Web para elegir contacto si no tiene móvil
-    els.btnSendWhatsappModal.href = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
-  }
 }
 
 // Event Listeners
@@ -443,7 +665,7 @@ els.leadsTbody.addEventListener('change', async (e) => {
     const { lead } = await res.json();
     const idx = allLeads.findIndex((l) => l.id === id);
     if (idx >= 0) allLeads[idx] = lead;
-    renderStats();
+    renderTable();
   }
 });
 
@@ -472,22 +694,69 @@ els.btnClearAll.addEventListener('click', async () => {
   renderTable();
 });
 
-// Eventos del Modal de Pitch
+// Eventos del Modal de Pitch, Cadencia y Seguimiento
 document.querySelectorAll('.pitch-tab').forEach((tab) => {
   tab.addEventListener('click', () => {
     if (!currentModalLead) return;
-    document.querySelectorAll('.pitch-tab').forEach((t) => t.classList.remove('active'));
-    tab.classList.add('active');
-    const type = tab.dataset.pitchType;
-    els.modalPitchTextarea.value =
-      type === 'automation'
-        ? currentModalLead.pitches?.whatsappAutomation || ''
-        : currentModalLead.pitches?.whatsappDirect || '';
-    updateModalWhatsappHref();
+    const stage = Number(tab.dataset.stage) || 1;
+    setActiveStageTab(stage);
+    els.modalPitchTextarea.value = getStagePitchText(currentModalLead, stage);
+    updateModalChannelHrefs();
   });
 });
 
-els.modalPitchTextarea.addEventListener('input', updateModalWhatsappHref);
+document.querySelectorAll('.reply-chip').forEach((chip) => {
+  chip.addEventListener('click', () => {
+    if (!currentModalLead) return;
+    const key = chip.dataset.reply;
+    const replyText = currentModalLead.pitches?.replies?.[key] || '';
+    if (!replyText) return;
+    document.querySelectorAll('.reply-chip').forEach((c) => c.classList.remove('active'));
+    chip.classList.add('active');
+    els.modalPitchTextarea.value = replyText;
+    updateModalChannelHrefs();
+  });
+});
+
+document.querySelectorAll('.followup-quick-btns .chip-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const days = Number(btn.dataset.days) || 0;
+    els.modalFollowUpDate.value = days > 0 ? toLocalDateStr(new Date(), days) : '';
+    userEditedFollowUpDate = true;
+    updateModalGcalHref();
+  });
+});
+
+els.modalFollowUpDate.addEventListener('change', () => {
+  userEditedFollowUpDate = true;
+  updateModalGcalHref();
+});
+
+els.modalNotesInput.addEventListener('input', updateModalGcalHref);
+
+els.modalPitchTextarea.addEventListener('input', updateModalChannelHrefs);
+
+els.btnReauditLead.addEventListener('click', async () => {
+  if (!currentModalLead) return;
+  const btn = els.btnReauditLead;
+  const prevText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ Auditando...';
+
+  try {
+    const res = await fetch(`/api/leads/${currentModalLead.id}/reaudit`, { method: 'POST' });
+    const data = await res.json();
+    if (res.ok && data.lead) {
+      const idx = allLeads.findIndex((l) => l.id === data.lead.id);
+      if (idx >= 0) allLeads[idx] = data.lead;
+      renderTable();
+      openPitchModal(data.lead.id);
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prevText;
+  }
+});
 
 els.btnCopyPitch.addEventListener('click', async () => {
   await navigator.clipboard.writeText(els.modalPitchTextarea.value);
@@ -506,6 +775,7 @@ els.btnSaveLeadModal.addEventListener('click', async () => {
     body: JSON.stringify({
       notes: els.modalNotesInput.value,
       crmStatus: els.modalCrmSelect.value,
+      nextFollowUpAt: els.modalFollowUpDate.value || null,
       customPitch: els.modalPitchTextarea.value
     })
   });
@@ -518,24 +788,48 @@ els.btnSaveLeadModal.addEventListener('click', async () => {
   }
 });
 
-els.btnSendWhatsappModal.addEventListener('click', async () => {
+async function recordLeadContact(channel) {
   if (!currentModalLead) return;
+  const recordContact = {
+    stage: currentStage,
+    channel,
+    message: els.modalPitchTextarea.value
+  };
+  if (userEditedFollowUpDate) {
+    recordContact.nextFollowUpAt = els.modalFollowUpDate.value || null;
+  }
+
   const res = await fetch(`/api/leads/${currentModalLead.id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      crmStatus: 'contactado',
+      crmStatus: els.modalCrmSelect.value === 'nuevo' ? 'contactado' : els.modalCrmSelect.value,
       notes: els.modalNotesInput.value,
       customPitch: els.modalPitchTextarea.value,
-      lastContactedAt: new Date().toISOString()
+      recordContact
     })
   });
+
   if (res.ok) {
     const { lead } = await res.json();
+    currentModalLead = lead;
     const idx = allLeads.findIndex((l) => l.id === lead.id);
     if (idx >= 0) allLeads[idx] = lead;
+    els.modalCrmSelect.value = lead.crmStatus;
+    els.modalFollowUpDate.value = lead.nextFollowUpAt || '';
+    userEditedFollowUpDate = false;
+    renderContactHistory(lead);
+    updateModalGcalHref();
     renderTable();
   }
+}
+
+els.btnSendWhatsappModal.addEventListener('click', () => {
+  recordLeadContact('whatsapp');
+});
+
+els.btnSendEmailModal.addEventListener('click', () => {
+  recordLeadContact('email');
 });
 
 els.btnCloseModal.addEventListener('click', () => {

@@ -1,5 +1,317 @@
 const { normalizeColombianPhone } = require('../storage/db');
 
+const UPPER_ACRONYMS = new Set([
+  'IN',
+  'HC',
+  'SJ',
+  'DGR',
+  'JLC',
+  'SST',
+  'ACDS',
+  'IPS',
+  'EPS',
+  'POS',
+  'CRM',
+  'IVIA',
+  'IT',
+  'TV',
+  '3D',
+  'VIP',
+  'B2B',
+  'PYME',
+  'PYMES'
+]);
+
+const TITLE_CASE_OVERRIDES = {
+  DR: 'Dr.',
+  'DR.': 'Dr.',
+  DRA: 'Dra.',
+  'DRA.': 'Dra.'
+};
+
+const LOWER_CONNECTORS = new Set([
+  'de',
+  'del',
+  'la',
+  'las',
+  'los',
+  'y',
+  'e',
+  'en',
+  'para',
+  'por',
+  'con',
+  'a',
+  'o',
+  'el',
+  'al'
+]);
+
+function capitalizeSegment(seg, isFirstWord) {
+  if (!seg) return seg;
+  const upper = seg.toUpperCase();
+  if (TITLE_CASE_OVERRIDES[upper]) return TITLE_CASE_OVERRIDES[upper];
+  if (seg.includes('&') && seg.length <= 6) return upper;
+  if (UPPER_ACRONYMS.has(upper.replace(/[.,]/g, ''))) return upper;
+  const lower = seg.toLowerCase();
+  if (!isFirstWord && LOWER_CONNECTORS.has(lower)) return lower;
+  return lower.charAt(0).toUpperCase() + lower.slice(1);
+}
+
+/**
+ * Limpia nombres largos de Google Maps (sufijos legales, pipes, subtítulos SEO y MAYÚSCULAS)
+ */
+function cleanBusinessName(rawName) {
+  let name = String(rawName || '').trim().replace(/\s+/g, ' ');
+  if (!name) return 'su negocio';
+
+  const legalSuffixRe = /\s+(?:m[aá]s\s+)?(?:s\.?\s*a\.?\s*s\.?|ltda\.?|s\.?\s*a\.?|e\.?\s*u\.?|s\.?\s*c\.?\s*a\.?)\.?$/i;
+  name = name.replace(legalSuffixRe, '').trim();
+
+  if (name.includes('|')) {
+    const parts = name
+      .split('|')
+      .map((p) => p.trim())
+      .filter(Boolean);
+    if (parts.length > 0) {
+      name = parts[0].length >= 5 ? parts[0] : parts.slice(0, 2).join(' ');
+    }
+  }
+
+  if (name.length > 36 && name.includes(' - ')) {
+    const first = name.split(' - ')[0].trim();
+    if (first.length >= 8) name = first;
+  }
+
+  if (name.length > 38 && name.includes(', ')) {
+    const first = name.split(', ')[0].trim();
+    if (first.length >= 10) name = first;
+  }
+
+  if (name.length > 36 && name.includes(': ')) {
+    const first = name.split(': ')[0].trim();
+    if (first.length >= 8) name = first;
+  }
+
+  name = name
+    .replace(legalSuffixRe, '')
+    .replace(/[.,\-:\s]+$/, '')
+    .trim();
+
+  const isAllUpper = !/[a-zñáéíóú]/.test(name) && name.length > 5;
+  const isAllLower = !/[A-ZÑÁÉÍÓÚ]/.test(name) && name.length > 5;
+
+  if (isAllUpper || isAllLower) {
+    name = name
+      .split(/\s+/)
+      .map((word, idx) => {
+        if (word.includes('-')) {
+          return word
+            .split('-')
+            .map((part, subIdx) => capitalizeSegment(part, idx === 0 && subIdx === 0))
+            .join('-');
+        }
+        return capitalizeSegment(word, idx === 0);
+      })
+      .join(' ');
+  }
+
+  return name || 'su negocio';
+}
+
+function cleanZone(city) {
+  const raw = String(city || '').trim();
+  if (!raw) return 'Bogotá';
+  const first = raw.split(',')[0].trim();
+  return first || 'Bogotá';
+}
+
+function getGreetingByHour(date = new Date()) {
+  const hour = date.getHours();
+  if (hour >= 5 && hour < 12) return 'buenos días';
+  if (hour >= 12 && hour < 19) return 'buenas tardes';
+  return 'buenas noches';
+}
+
+function formatPlatformLabel(hostname = '') {
+  const h = String(hostname || '').toLowerCase();
+  if (h.includes('wa.me') || h.includes('whatsapp')) return 'WhatsApp';
+  if (h.includes('instagram')) return 'Instagram';
+  if (h.includes('facebook') || h.includes('fb.')) return 'Facebook';
+  if (h.includes('linktr.ee')) return 'Linktree';
+  if (h.includes('webnode')) return 'Webnode';
+  if (h.includes('wixsite')) return 'Wix';
+  if (h.includes('amawebs')) return 'Amawebs';
+  if (h.includes('blogspot')) return 'Blogger';
+  if (h.includes('wordpress.com')) return 'WordPress gratuito';
+  if (h.includes('sites.google')) return 'Google Sites';
+  if (h.includes('canva.site')) return 'Canva';
+  return h || 'un enlace externo';
+}
+
+function getGenericEmailProviderLabel(email = '') {
+  const domain = String(email || '').split('@')[1] || '';
+  if (domain.includes('gmail')) return 'Gmail';
+  if (domain.includes('hotmail') || domain.includes('outlook') || domain.includes('live')) {
+    return 'Hotmail/Outlook';
+  }
+  if (domain.includes('yahoo')) return 'Yahoo';
+  return 'correo gratuito';
+}
+
+/**
+ * Construye la cadencia de 4 toques (0-3-7-15) + 5 respuestas rápidas + correo humano
+ */
+function buildColdOutreachTemplates(rawLead, audit, scoredContext) {
+  const cleanName = cleanBusinessName(rawLead.name);
+  const zone = cleanZone(rawLead.city);
+  const greeting = getGreetingByHour();
+  const reviewsCount = Number(rawLead.reviewsCount) || 0;
+  const rating = Number(rawLead.rating) || 0;
+  const hasStrongReviews = reviewsCount >= 8 && rating >= 4.0;
+  const domain = audit?.hostname || rawLead.website || 'su página web';
+  const opp = scoredContext.primaryOpportunity;
+
+  let stage1 = '';
+  let findingShort = 'mejorar su presencia web';
+  let emailSubject = `Consulta rápida sobre ${cleanName}`;
+
+  if (opp === 'BROKEN_WEB') {
+    findingShort = 'corregir el enlace caído en Google';
+    emailSubject = `Aviso: el enlace web de ${cleanName} aparece caído en Google`;
+    stage1 =
+      `Hola, ${greeting}. Estaba revisando el perfil de ${cleanName} en Google Maps aquí en ${zone} ` +
+      `y noté que el enlace a su página (${domain}) aparece caído y no les carga a los clientes.\n\n` +
+      `¿Ustedes administran el sitio internamente o tienen a alguien técnico a quien avisarle?`;
+  } else if (opp === 'NO_WEBSITE') {
+    findingShort = 'montar su página web propia';
+    emailSubject = `Consulta sobre la ficha de ${cleanName} en Google Maps`;
+    const proof = hasStrongReviews
+      ? `tienen muy buenas calificaciones (${reviewsCount} reseñas)`
+      : 'tienen muy buenas referencias';
+    stage1 =
+      `Hola, ${greeting}. Vi el perfil de ${cleanName} en Google Maps aquí en ${zone}; ${proof}, ` +
+      `pero noté que aún no tienen página web enlazada.\n\n` +
+      `¿Actualmente manejan todo por WhatsApp y referidos o tienen pensado montar su web?`;
+  } else if (opp === 'SOCIAL_ONLY') {
+    const channel = formatPlatformLabel(audit?.hostname);
+    findingShort = 'tener su página web propia';
+    emailSubject = `Consulta sobre el enlace de ${cleanName} en Google Maps`;
+    const proof = hasStrongReviews ? ` (vi sus ${reviewsCount} reseñas en ${zone})` : ` en ${zone}`;
+    stage1 =
+      `Hola, ${greeting}. Estaba viendo el perfil de ${cleanName} en Google Maps${proof}. ` +
+      `Noté que el enlace web dirige solo a ${channel} en lugar de una página propia.\n\n` +
+      `¿Lo manejan así por elección propia o es algo que tienen pendiente?`;
+  } else if (opp === 'FREE_BUILDER') {
+    const platform = formatPlatformLabel(audit?.hostname);
+    findingShort = 'pasar su web a dominio propio (.com)';
+    emailSubject = `Consulta sobre la web de ${cleanName}`;
+    stage1 =
+      `Hola, ${greeting}. Vi el perfil de ${cleanName} en Google aquí en ${zone}. ` +
+      `Tienen muy buenas referencias, pero noté que su página sigue en un enlace gratuito (${platform}) y sin correo corporativo.\n\n` +
+      `¿Han pensado en pasarla a dominio propio (.com) o por ahora la mantienen así?`;
+  } else if (opp === 'NO_SSL') {
+    findingShort = 'activar el certificado de seguridad (SSL)';
+    emailSubject = `Aviso: la web de ${cleanName} muestra alerta de "Sitio no seguro"`;
+    stage1 =
+      `Hola, ${greeting}. Entré a la página de ${cleanName} (${domain}) desde Google Maps ` +
+      `y noté que el navegador muestra una alerta de "Sitio no seguro" al abrirla.\n\n` +
+      `¿Ustedes manejan el mantenimiento de la página o tienen proveedor externo para revisarlo?`;
+  } else if (opp === 'GENERIC_EMAIL') {
+    const genEmail = audit?.genericEmails?.[0] || '';
+    const provider = getGenericEmailProviderLabel(genEmail);
+    findingShort = `configurar correo corporativo (@${domain})`;
+    emailSubject = `Consulta rápida sobre el correo de ${cleanName}`;
+    stage1 =
+      `Hola, ${greeting}. Estuve viendo la página de ${cleanName} desde Google Maps. ` +
+      `Se ve muy bien, solo noté que usan un correo de ${provider} en lugar de uno con su propio dominio (@${domain}).\n\n` +
+      `¿No lo han configurado todavía o prefieren manejarlo así?`;
+  } else if (opp === 'SUBOPTIMAL_WEB') {
+    const missingItems = [];
+    if (!audit?.hasWhatsappWidget) missingItems.push('botón directo a WhatsApp');
+    if (!audit?.hasMobileViewport) missingItems.push('adaptación a celular');
+    const detail = missingItems.length > 0 ? missingItems.join(' ni ') : 'contacto rápido por WhatsApp';
+    findingShort = `agregar ${detail} en su web`;
+    emailSubject = `Detalle rápido en la web de ${cleanName}`;
+    stage1 =
+      `Hola, ${greeting}. Estaba viendo la página de ${cleanName} (${domain}) desde Google Maps en ${zone}. ` +
+      `Se ve bien, pero noté que no tiene ${detail} visible para quienes entran desde el celular.\n\n` +
+      `¿Ustedes mismos administran la web o alguien externo les hace esos ajustes?`;
+  } else {
+    findingShort = 'automatizar citas o cotizaciones';
+    emailSubject = `Consulta rápida para ${cleanName}`;
+    stage1 =
+      `Hola, ${greeting}. Vi el perfil de ${cleanName} en Google Maps aquí en ${zone}; ` +
+      `tienen muy buena presencia digital.\n\n` +
+      `Por curiosidad, ¿hoy agendan citas y envían cotizaciones de forma manual por WhatsApp o ya lo tienen automatizado?`;
+  }
+
+  let stage2 = '';
+  if (opp === 'BROKEN_WEB' || opp === 'NO_SSL') {
+    stage2 =
+      `Hola de nuevo, ${greeting}. Te dejo el pantallazo de lo que sale al intentar abrir el enlace de ${cleanName} desde Google, ` +
+      `por si el mensaje anterior quedó abajo en el chat.`;
+  } else {
+    stage2 =
+      `Hola, ${greeting}. Te escribo rápido por si el mensaje de hace unos días quedó enterrado. ` +
+      `¿Al final sí tienen en el radar ${findingShort} este mes o por ahora siguen como están?`;
+  }
+
+  const stage3 =
+    `Hola, ${greeting}. Soy Robin, manejo soluciones web para negocios aquí en Bogotá (IVIA). ` +
+    `Como vi que ${cleanName} tiene buena reputación en Google pero le falta ${findingShort}, ` +
+    `si les sirve les puedo armar una vista previa rápida sin costo — trabajamos con cero anticipos y solo pagan si les gusta funcionando. ¿Les gustaría verla?`;
+
+  const stage4 =
+    `Hola, ${greeting}. Para no ser intenso, dejo el tema hasta aquí. ` +
+    `Si más adelante necesitan ayuda con la página web o correos corporativos de ${cleanName}, me escriben por este mismo número con toda confianza. ¡Muchos éxitos con el negocio!`;
+
+  const replies = {
+    gracias:
+      `Con gusto. Sí, justo a eso nos dedicamos aquí en Bogotá (IVIA). ` +
+      `Si quieres reviso en 5 minutos si el problema es de servidor o vencimiento del dominio y te digo exactamente qué pasa, sin costo. ` +
+      `¿Prefieres que te cuente por aquí o te llamo 2 minutos mañana?`,
+    quien:
+      `¡Hola! Soy Robin, de IVIA (Ingversia) aquí en Bogotá. Estaba revisando negocios del sector en Google Maps y vi el caso puntual de ${cleanName}. ` +
+      `No quería mandar publicidad larga sin preguntar: nosotros montamos y administramos páginas web y correos corporativos para negocios locales sin cobrar anticipos ` +
+      `(primero ves tu sitio en línea y solo pagas si lo apruebas). ¿Te interesaría ver una propuesta rápida para ${cleanName}?`,
+    precio:
+      `Para darte el número claro de una vez: manejamos planes llave en mano sin cobro de creación ni anticipos ` +
+      `(incluye diseño, dominio .com, hosting, SSL, botón de WhatsApp y soporte mensual).\n` +
+      `- Plan Básico: $89.000/mes (sitio web profesional optimizado para celular).\n` +
+      `- Plan Estándar: $149.000/mes (web más completa + correos corporativos @tunegocio.com).\n` +
+      `- En Plan Anual quedan 2 meses gratis ($890.000 o $1.490.000/año).\n\n` +
+      `Lo mejor es que no pagas nada al inicio: la montamos en 7 días, la revisas en vivo y solo pagas si la apruebas. ¿Necesitarían también correos corporativos o solo la página?`,
+    info:
+      `Claro que sí, en resumen te entregamos en 7 días:\n` +
+      `• Página web rápida adaptada a celular con botón directo a WhatsApp\n` +
+      `• Dominio propio (.com) y certificado de seguridad SSL\n` +
+      `• Correos corporativos (@tunegocio.com) y soporte mensual incluido\n` +
+      `• Cero anticipos: solo pagas cuando ves el sitio funcionando y lo apruebas (desde $89.000/mes).\n\n` +
+      `Puedes ver nuestro trabajo en https://ivia.ingversia.com. Si quieres, esta semana te armo un borrador visual para ${cleanName} sin compromiso. ¿Te parece?`,
+    noAhora:
+      `Súper válido, si hoy les funciona bien así está perfecto. ` +
+      `Si en algún momento quieren evaluar cómo se vería su página para captar clientes que buscan en Google, aquí queda mi contacto sin compromiso. ¡Un saludo!`
+  };
+
+  return {
+    cleanName,
+    pitches: {
+      whatsappDirect: stage1,
+      whatsappAutomation: stage3,
+      cadence: {
+        stage1,
+        stage2,
+        stage3,
+        stage4
+      },
+      replies,
+      emailSubject,
+      emailBody: `${stage1}\n\nQuedo atento.\nRobin · IVIA (Ingversia)`
+    }
+  };
+}
+
 /**
  * Califica el prospecto (0 - 100) según el modelo comercial de IVIA (ivia.ingversia.com)
  * y genera los mensajes de contacto personalizados para WhatsApp y Correo.
@@ -10,7 +322,6 @@ function scoreAndBuildPitch(rawLead, audit) {
   const opportunities = [];
 
   const phoneInfo = normalizeColombianPhone(rawLead.phone || '');
-  // Si en la web encontramos un número de WhatsApp y en Maps había un fijo o nada, usamos el de la web
   const webWaInfo = audit?.whatsappWebNumber
     ? normalizeColombianPhone(audit.whatsappWebNumber)
     : { isWhatsappMobile: false, e164: '' };
@@ -27,7 +338,7 @@ function scoreAndBuildPitch(rawLead, audit) {
   let primaryLabel = 'Automatización / Sistemas a Medida';
   let recommendedPlan = 'Sistemas a la Medida / Automatización IVIA';
 
-  // 1. Evaluar Dolor Digital Principal
+  // 1. Evaluar Dolor Digital Principal (BROKEN_WEB antes que FREE_BUILDER si está caída)
   if (!audit || audit.urlType === 'NO_WEBSITE') {
     score += 48;
     primaryOpportunity = 'NO_WEBSITE';
@@ -44,6 +355,16 @@ function scoreAndBuildPitch(rawLead, audit) {
     painTags.push(`Solo usa ${audit.hostname}`);
     painTags.push('Sin Dominio Corporativo');
     opportunities.push('Pasar de depender solo de redes sociales a tener portal oficial en Google');
+  } else if (audit.urlType !== 'INVALID_URL' && !audit.reachable) {
+    score += 50;
+    primaryOpportunity = 'BROKEN_WEB';
+    primaryLabel = 'Sitio Web Caído / Error';
+    recommendedPlan = 'Rescate Web Urgente — Plan Estándar ($149.000/mes)';
+    painTags.push(`Web Caída (${audit.error || 'Error'})`);
+    if (audit.urlType === 'FREE_BUILDER') {
+      painTags.push('Subdominio Gratuito Caído');
+    }
+    opportunities.push('Su enlace en Google Maps está roto o vencido: pérdida directa de clientes');
   } else if (audit.urlType === 'FREE_BUILDER') {
     score += 38;
     primaryOpportunity = 'FREE_BUILDER';
@@ -51,13 +372,6 @@ function scoreAndBuildPitch(rawLead, audit) {
     recommendedPlan = 'Plan Básico ($89.000/mes) o Estándar ($149.000/mes)';
     painTags.push('Dominio Gratuito');
     opportunities.push('Migrar de plataforma gratuita a dominio corporativo propio con SSL');
-  } else if (!audit.reachable) {
-    score += 50;
-    primaryOpportunity = 'BROKEN_WEB';
-    primaryLabel = 'Sitio Web Caído / Error';
-    recommendedPlan = 'Rescate Web Urgente — Plan Estándar ($149.000/mes)';
-    painTags.push(`Web Caída (${audit.error || 'Error'})`);
-    opportunities.push('Su enlace en Google Maps está roto o vencido: pérdida directa de clientes');
   } else {
     // Tiene dominio propio y carga: revisamos vulnerabilidades y brechas
     if (!audit.hasValidSsl) {
@@ -69,16 +383,29 @@ function scoreAndBuildPitch(rawLead, audit) {
       opportunities.push('El navegador alerta "Sitio No Seguro" a sus visitantes');
     }
 
-    if (audit.genericEmails && audit.genericEmails.length > 0) {
-      score += 22;
-      if (primaryOpportunity === 'OPTIMIZED_OR_AUTOMATION') {
-        primaryOpportunity = 'GENERIC_EMAIL';
-        primaryLabel = 'Usa Correo @gmail/@hotmail';
-        recommendedPlan = 'Correo Corporativo Blindado + Administración Web';
+    const hasCorporateEmail = (audit.corporateEmails || []).length > 0;
+    const hasGenericEmail = (audit.genericEmails || []).length > 0;
+
+    if (hasGenericEmail && !hasCorporateEmail) {
+      if (!audit.hasMxRecords) {
+        score += 24;
+        if (primaryOpportunity === 'OPTIMIZED_OR_AUTOMATION') {
+          primaryOpportunity = 'GENERIC_EMAIL';
+          primaryLabel = 'Usa Correo @gmail/@hotmail';
+          recommendedPlan = 'Correo Corporativo Blindado + Administración Web';
+        }
+        painTags.push(`Solo usa ${audit.genericEmails[0]}`);
+      } else {
+        score += 12;
+        if (primaryOpportunity === 'OPTIMIZED_OR_AUTOMATION') {
+          primaryOpportunity = 'GENERIC_EMAIL';
+          primaryLabel = 'Publica Correo Genérico';
+          recommendedPlan = 'Correo Corporativo Blindado + Administración Web';
+        }
+        painTags.push(`Publica ${audit.genericEmails[0]}`);
       }
-      painTags.push(`Usa ${audit.genericEmails[0]}`);
       opportunities.push('Reemplazar correo genérico por buzones corporativos (@suempresa.com)');
-    } else if (!audit.hasMxRecords) {
+    } else if (!hasGenericEmail && !audit.hasMxRecords) {
       score += 14;
       painTags.push('Sin Servidor de Correo (MX)');
       opportunities.push('Configurar buzones de correo empresarial con SPF/DKIM');
@@ -127,7 +454,18 @@ function scoreAndBuildPitch(rawLead, audit) {
     score -= 15;
   }
 
-  if (reviewsCount >= 15 && rating >= 4.0) {
+  const isLargeEnterprise =
+    reviewsCount >= 350 &&
+    audit?.urlType === 'CUSTOM_DOMAIN' &&
+    audit?.reachable &&
+    audit?.hasValidSsl;
+
+  if (isLargeEnterprise) {
+    score -= 35;
+    painTags.push('Empresa Grande (+350 reseñas)');
+  } else if (rating > 0 && rating < 3.5) {
+    painTags.push('Baja calificación');
+  } else if (reviewsCount >= 15 && rating >= 4.0) {
     score += 18;
     painTags.push(`Negocio Validado (${rating}★ · ${reviewsCount} reseñas)`);
   } else if (reviewsCount >= 5) {
@@ -146,54 +484,19 @@ function scoreAndBuildPitch(rawLead, audit) {
   if (score >= 70) priority = 'ALTA';
   else if (score >= 45) priority = 'MEDIA';
 
-  // 3. Construir Mensajes Personalizados de Contacto (WhatsApp + Email)
-  const bizName = rawLead.name || 'su empresa';
-  const category = rawLead.category || 'su sector';
-  const city = rawLead.city || 'Colombia';
-
-  let pitchDirect = '';
-  if (primaryOpportunity === 'NO_WEBSITE') {
-    pitchDirect =
-      `Hola, equipo de *${bizName}* 👋. Los encontré en Google Maps buscando *${category}* en ${city} (vi que tienen muy buenas referencias).\n\n` +
-      `Noté que en su ficha de Google aún no tienen enlazada una página web oficial. En *IVIA (by Ingversia)* creamos y administramos sitios web profesionales con dominio propio, correo corporativo y botón directo a WhatsApp desde *$89.000/mes*.\n\n` +
-      `Trabajamos con *Cero Anticipos*: diseñamos una propuesta para *${bizName}* y solo pagas cuando apruebas el sitio funcionando. ¿Te gustaría que te envíe un prototipo sin costo por aquí?`;
-  } else if (primaryOpportunity === 'SOCIAL_ONLY') {
-    pitchDirect =
-      `Hola, equipo de *${bizName}* 👋. Vi su perfil en Google Maps e Instagram buscando *${category}* en ${city}.\n\n` +
-      `Noté que actualmente dirigen su ficha de Google a redes sociales en lugar de un dominio propio (.com). En *IVIA (by Ingversia)* les armamos su sitio web oficial con catálogo/servicios, correo corporativo (@suempresa.com) y conexión a WhatsApp para captar clientes que buscan en Google.\n\n` +
-      `No pedimos anticipos (*pagas únicamente cuando apruebas tu sitio en vivo*). ¿Les gustaría ver una maqueta para *${bizName}* sin compromiso?`;
-  } else if (primaryOpportunity === 'BROKEN_WEB') {
-    pitchDirect =
-      `Hola, equipo de *${bizName}* 👋. Estaba revisando su ficha en Google Maps y noté que el enlace a su página web (${audit?.hostname || 'su sitio'}) actualmente presenta un error y no carga para los clientes.\n\n` +
-      `En *IVIA (by Ingversia)* nos encargamos de rescatar y administrar toda su infraestructura web (dominio, hosting NVMe, seguridad SSL y soporte mensual) sin anticipos: *solo pagan cuando el sitio está 100% en línea y aprobado*.\n\n` +
-      `¿Con quién podría conversar 2 minutos para ayudarles a restablecerlo?`;
-  } else if (primaryOpportunity === 'NO_SSL') {
-    pitchDirect =
-      `Hola, equipo de *${bizName}* 👋. Visitando su página web (${audit?.hostname}) desde Google Maps, noté que el navegador la marca como *"No Segura" (sin certificado SSL activo)*, lo que puede frenar a clientes potenciales.\n\n` +
-      `En *IVIA (by Ingversia)* modernizamos su sitio web con blindaje SSL Cloudflare, correo corporativo y mantenimiento mensual incluido, *sin anticipos (pagas cuando apruebas el resultado)*.\n\n` +
-      `¿Te comparto un diagnóstico rápido de cómo dejarlo 100% seguro y optimizado para celular?`;
-  } else if (primaryOpportunity === 'GENERIC_EMAIL' || primaryOpportunity === 'FREE_BUILDER') {
-    pitchDirect =
-      `Hola, equipo de *${bizName}* 👋. Los ubiqué en Google Maps buscando *${category}* en ${city}.\n\n` +
-      `Vimos una oportunidad genial para elevar la imagen corporativa de *${bizName}* con un dominio propio, buzones de correo empresariales (*contacto@tuempresa.com* cero spam) y un sitio web ultrarrápido administrado por nosotros.\n\n` +
-      `En *IVIA* trabajamos sin anticipos ni cláusulas de permanencia (*pagas solo cuando apruebas tu plataforma*). ¿Te envío información breve por aquí?`;
-  } else {
-    pitchDirect =
-      `Hola, equipo de *${bizName}* 👋. Estuve viendo su presencia en Google Maps en ${city}.\n\n` +
-      `En *IVIA (by Ingversia)* desarrollamos herramientas a la medida y automatizaciones para empresas de *${category}* que reducen el tiempo operativo (agendamiento de citas, generación automática de documentos/cotizaciones, inventario y portales de clientes) además de administración web integral.\n\n` +
-      `¿Qué proceso manual les está quitando más tiempo hoy en *${bizName}*? Me encantaría mostrarles cómo automatizarlo.`;
-  }
-
-  const pitchAutomation =
-    `Hola, equipo de *${bizName}* 👋. Soy de *IVIA (by Ingversia)* (https://ivia.ingversia.com).\n\n` +
-    `Ayudamos a negocios de *${category}* en ${city} a ahorrar horas operativas cada semana mediante herramientas a la medida (automatización de cotizaciones/documentos, agendamiento de citas por WhatsApp, control de inventario y sitios web administrados).\n\n` +
-    `Trabajamos bajo modalidad de *Cero Anticipos (pagas al aprobar)*. ¿Les gustaría agendar una llamada corta de 10 min para evaluar qué tareas repetitivas podemos automatizar en *${bizName}*?`;
+  // 3. Construir Mensajes Personalizados Humanos (Cadencia 0-3-7-15 + Respuestas + Email)
+  const { cleanName, pitches } = buildColdOutreachTemplates(rawLead, audit, {
+    primaryOpportunity,
+    primaryLabel,
+    recommendedPlan
+  });
 
   const whatsappUrl = bestWhatsappE164
-    ? `https://wa.me/${bestWhatsappE164}?text=${encodeURIComponent(pitchDirect)}`
+    ? `https://wa.me/${bestWhatsappE164}?text=${encodeURIComponent(pitches.whatsappDirect)}`
     : '';
 
   return {
+    cleanName,
     score,
     priority,
     primaryOpportunity,
@@ -206,15 +509,14 @@ function scoreAndBuildPitch(rawLead, audit) {
     isWhatsappMobile: hasWhatsappMobile,
     phoneType: hasWhatsappMobile ? 'mobile' : phoneInfo.phoneType,
     whatsappUrl,
-    pitches: {
-      whatsappDirect: pitchDirect,
-      whatsappAutomation: pitchAutomation,
-      emailSubject: `Diagnóstico de presencia digital y automatización para ${bizName} | IVIA`,
-      emailBody: pitchDirect.replace(/\*/g, '')
-    }
+    pitches
   };
 }
 
 module.exports = {
-  scoreAndBuildPitch
+  scoreAndBuildPitch,
+  cleanBusinessName,
+  cleanZone,
+  getGreetingByHour,
+  buildColdOutreachTemplates
 };

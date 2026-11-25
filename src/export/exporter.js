@@ -43,6 +43,8 @@ function exportLeadsToCsv(leads, customFilename = null) {
     'Ciudad / Zona',
     'Dirección',
     'Dolores Detectados',
+    'Toques',
+    'Próximo Seguimiento',
     'Notas CRM',
     'Mensaje WhatsApp Sugerido',
     'Link Google Maps'
@@ -69,6 +71,8 @@ function exportLeadsToCsv(leads, customFilename = null) {
     l.city || '',
     l.address || '',
     (l.painTags || []).join(', '),
+    l.followUpCount || 0,
+    l.nextFollowUpAt || '',
     l.notes || '',
     l.customPitch || l.pitches?.whatsappDirect || '',
     l.mapsUrl || ''
@@ -122,6 +126,8 @@ async function exportLeadsToExcel(leads, customFilename = null) {
     { header: 'Ciudad / Zona', key: 'city', width: 20 },
     { header: 'Dirección', key: 'address', width: 32 },
     { header: 'Hallazgos Clave', key: 'painTags', width: 38 },
+    { header: 'Toques', key: 'followUpCount', width: 10 },
+    { header: 'Próximo Seguimiento', key: 'nextFollowUpAt', width: 18 },
     { header: 'Notas CRM', key: 'notes', width: 28 },
     { header: 'Mensaje Sugerido WhatsApp', key: 'pitch', width: 55 }
   ];
@@ -172,6 +178,8 @@ async function exportLeadsToExcel(leads, customFilename = null) {
       city: lead.city || '',
       address: lead.address || '',
       painTags: (lead.painTags || []).join(' · '),
+      followUpCount: lead.followUpCount || 0,
+      nextFollowUpAt: lead.nextFollowUpAt || '',
       notes: lead.notes || '',
       pitch: lead.customPitch || lead.pitches?.whatsappDirect || ''
     });
@@ -205,7 +213,7 @@ async function exportLeadsToExcel(leads, customFilename = null) {
 
   sheet.autoFilter = {
     from: 'A1',
-    to: 'U1'
+    to: 'W1'
   };
 
   await workbook.xlsx.writeFile(filePath);

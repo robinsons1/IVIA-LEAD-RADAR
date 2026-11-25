@@ -142,6 +142,15 @@
         <div class="kpi-sub">Todos los negocios analizados</div>
       </button>
 
+      <button type="button" class="kpi-card" id="kpi-card-due" data-filter="DUE_FOLLOWUP">
+        <div class="kpi-top">
+          <span class="kpi-label">⏰ Seguimientos Hoy</span>
+          <span class="kpi-badge slate" id="badge-due-followup">Al día</span>
+        </div>
+        <div class="kpi-value" id="stat-due-followup">0</div>
+        <div class="kpi-sub">Vencidos o programados para hoy</div>
+      </button>
+
       <button type="button" class="kpi-card" data-filter="NO_WEBSITE">
         <div class="kpi-top">
           <span class="kpi-label">🔴 Sin Página Web</span>
@@ -209,6 +218,7 @@
 
           <select id="filter-sort" class="toolbar-select">
             <option value="score_desc">Ordenar: Mayor Score IVIA</option>
+            <option value="followup_due">Ordenar: Seguimientos Vencidos</option>
             <option value="reviews_desc">Ordenar: Más Reseñas en Maps</option>
             <option value="recent">Ordenar: Más Recientes</option>
           </select>
@@ -255,26 +265,65 @@
           <span class="modal-kicker" id="modal-lead-category">Categoría</span>
           <h3 id="modal-lead-name">Nombre del Negocio</h3>
         </div>
-        <button type="button" class="modal-close" id="btn-close-modal">&times;</button>
+        <div class="modal-header-actions">
+          <button type="button" class="btn btn-outline btn-sm btn-reaudit" id="btn-reaudit-lead" title="Volver a verificar si el sitio web carga, tiene SSL y correos hoy">
+            🔄 Re-auditar Web
+          </button>
+          <button type="button" class="modal-close" id="btn-close-modal">&times;</button>
+        </div>
       </div>
 
       <div class="modal-body">
         <!-- Resumen Técnico de la Auditoría -->
         <div class="audit-summary-grid" id="modal-audit-grid"></div>
 
-        <!-- Selector de Enfoque del Mensaje -->
+        <!-- Selector de Cadencia de Seguimiento (0 - 3 - 7 - 15) -->
         <div class="pitch-tabs">
-          <button type="button" class="pitch-tab active" data-pitch-type="direct">
-            🎯 Enfoque 1: Dolor Detectado + Cero Anticipos (Web / Correo / SSL)
+          <button type="button" class="pitch-tab active" data-stage="1">
+            1️⃣ Toque 1 (Frío)
           </button>
-          <button type="button" class="pitch-tab" data-pitch-type="automation">
-            ⚡ Enfoque 2: Herramientas para Ahorrar Tiempo y Automatización
+          <button type="button" class="pitch-tab" data-stage="2">
+            2️⃣ Seguim. (+3d)
+          </button>
+          <button type="button" class="pitch-tab" data-stage="3">
+            3️⃣ Valor (+7d)
+          </button>
+          <button type="button" class="pitch-tab" data-stage="4">
+            4️⃣ Cierre (+15d)
           </button>
         </div>
 
+        <!-- Respuestas Rápidas si el cliente ya contestó -->
+        <div class="quick-replies-bar">
+          <span class="quick-replies-label">💬 Si te contestan:</span>
+          <button type="button" class="reply-chip" data-reply="gracias">Gracias / ¿Arreglan?</button>
+          <button type="button" class="reply-chip" data-reply="quien">¿Quién habla?</button>
+          <button type="button" class="reply-chip" data-reply="precio">¿Cuánto vale?</button>
+          <button type="button" class="reply-chip" data-reply="info">Envíame info</button>
+          <button type="button" class="reply-chip" data-reply="noAhora">Por ahora no</button>
+        </div>
+
         <div class="form-field">
-          <label for="modal-pitch-textarea">Mensaje personalizado listo para enviar (puedes editarlo antes de abrir WhatsApp):</label>
-          <textarea id="modal-pitch-textarea" rows="7"></textarea>
+          <label for="modal-pitch-textarea">Mensaje personalizado listo para enviar (puedes editarlo antes de abrir WhatsApp o Correo):</label>
+          <textarea id="modal-pitch-textarea" rows="6"></textarea>
+        </div>
+
+        <div class="followup-scheduler">
+          <div class="followup-scheduler-top">
+            <label for="modal-followup-date">⏰ Próximo seguimiento:</label>
+            <input type="date" id="modal-followup-date" />
+            <div class="followup-quick-btns">
+              <button type="button" class="chip-btn" data-days="3">+3d</button>
+              <button type="button" class="chip-btn" data-days="5">+5d</button>
+              <button type="button" class="chip-btn" data-days="7">+7d</button>
+              <button type="button" class="chip-btn" data-days="15">+15d</button>
+              <button type="button" class="chip-btn chip-clear" data-days="0">Quitar</button>
+            </div>
+            <a href="#" target="_blank" class="btn btn-outline btn-sm" id="btn-gcal-reminder" title="Crear recordatorio en Google Calendar para tu celular">
+              📅 Google Calendar
+            </a>
+          </div>
+          <div class="contact-history-line" id="modal-contact-history"></div>
         </div>
 
         <div class="modal-crm-row">
@@ -298,13 +347,16 @@
 
       <div class="modal-footer">
         <button type="button" class="btn btn-outline" id="btn-copy-pitch">
-          📋 Copiar Mensaje
+          📋 Copiar
         </button>
+        <a href="#" class="btn btn-outline hidden" id="btn-send-email-modal" title="Abrir cliente de correo con este mensaje">
+          ✉️ Correo
+        </a>
         <button type="button" class="btn btn-outline" id="btn-save-lead-modal">
-          💾 Guardar Notas/Estado
+          💾 Guardar
         </button>
         <a href="#" target="_blank" class="btn btn-whatsapp" id="btn-send-whatsapp-modal">
-          <span>Enviar por WhatsApp y Marcar Contactado →</span>
+          <span>Enviar por WhatsApp (Toque 1) →</span>
         </a>
       </div>
     </div>

@@ -35,13 +35,29 @@ const els = {
   statBroken: document.getElementById('stat-broken'),
   statGmail: document.getElementById('stat-generic-email'),
   statWhatsapp: document.getElementById('stat-whatsapp'),
-  // Modal Pitch
+  // Modal Pitch / Detalle / Edición
   pitchModal: document.getElementById('pitch-modal'),
+  modalPitchBody: document.getElementById('modal-pitch-body'),
   btnCloseModal: document.getElementById('btn-close-modal'),
+  btnToggleEditLead: document.getElementById('btn-toggle-edit-lead'),
   btnReauditLead: document.getElementById('btn-reaudit-lead'),
   modalLeadName: document.getElementById('modal-lead-name'),
   modalLeadCategory: document.getElementById('modal-lead-category'),
+  modalLeadSub: document.getElementById('modal-lead-sub'),
+  modalLeadInfoCard: document.getElementById('modal-lead-info-card'),
+  modalEditLeadPanel: document.getElementById('modal-edit-lead-panel'),
+  editLeadName: document.getElementById('edit-lead-name'),
+  editLeadCategory: document.getElementById('edit-lead-category'),
+  editLeadPhone: document.getElementById('edit-lead-phone'),
+  editLeadWebsite: document.getElementById('edit-lead-website'),
+  editLeadCity: document.getElementById('edit-lead-city'),
+  editLeadAddress: document.getElementById('edit-lead-address'),
+  editLeadMapsUrl: document.getElementById('edit-lead-maps-url'),
+  btnCancelEditLead: document.getElementById('btn-cancel-edit-lead'),
+  btnSaveBusinessData: document.getElementById('btn-save-business-data'),
   modalAuditGrid: document.getElementById('modal-audit-grid'),
+  modalPainTags: document.getElementById('modal-pain-tags'),
+  modalPitchSection: document.getElementById('modal-pitch-section'),
   modalPitchTextarea: document.getElementById('modal-pitch-textarea'),
   modalFollowUpDate: document.getElementById('modal-followup-date'),
   btnGcalReminder: document.getElementById('btn-gcal-reminder'),
@@ -65,6 +81,19 @@ function escapeHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function safeHttpUrl(rawUrl) {
+  const str = String(rawUrl || '').trim();
+  if (!str) return '';
+  const candidate = /^https?:\/\//i.test(str) ? str : `https://${str}`;
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return parsed.href;
+    }
+  } catch (_) {}
+  return '';
 }
 
 function toLocalDateStr(dateInput = new Date(), addDays = 0) {
@@ -318,7 +347,7 @@ function renderTable() {
             </div>
           </td>
           <td>
-            <div class="biz-title">${escapeHtml(lead.name)}</div>
+            <div class="biz-title biz-title-link" data-action="open-detail" data-id="${escapeHtml(lead.id)}" title="Ver ficha completa y editar">${escapeHtml(lead.name)}</div>
             <div class="biz-meta">
               <span>${escapeHtml(lead.category || 'Negocio')}</span>
               <span>·</span>
@@ -377,6 +406,9 @@ function renderTable() {
           </td>
           <td style="text-align:right;">
             <div class="action-group">
+              <button type="button" class="btn btn-outline btn-sm" data-action="open-detail" data-id="${escapeHtml(lead.id)}" title="Ver toda la información y editar datos">
+                ✏️ Ver / Editar
+              </button>
               <button type="button" class="btn ${actionBtnClass} btn-sm" data-action="open-pitch" data-id="${escapeHtml(lead.id)}">
                 ${actionBtnText}
               </button>
@@ -526,53 +558,209 @@ function renderContactHistory(lead) {
   els.modalContactHistory.textContent = `Historial (${history.length}): ${items.join(' → ')}`;
 }
 
-// Abrir modal de Pitch, Cadencia & Auditoría
-function openPitchModal(leadId) {
+function populateEditLeadInputs(lead) {
+  els.editLeadName.value = lead.name || '';
+  els.editLeadCategory.value = lead.category || '';
+  els.editLeadPhone.value = lead.phone || '';
+  els.editLeadWebsite.value = lead.website || '';
+  els.editLeadCity.value = lead.city || '';
+  els.editLeadAddress.value = lead.address || '';
+  els.editLeadMapsUrl.value = lead.mapsUrl || '';
+}
+
+function getEditedBusinessPayload() {
+  return {
+    name: els.editLeadName.value.trim(),
+    category: els.editLeadCategory.value.trim(),
+    phone: els.editLeadPhone.value.trim(),
+    website: els.editLeadWebsite.value.trim(),
+    city: els.editLeadCity.value.trim(),
+    address: els.editLeadAddress.value.trim(),
+    mapsUrl: els.editLeadMapsUrl.value.trim()
+  };
+}
+
+function renderLeadInfoCard(lead) {
+  const audit = lead.audit || {};
+  const websiteRaw = audit.normalizedUrl || lead.website || '';
+  const websiteHref = safeHttpUrl(websiteRaw);
+  const mapsHref = safeHttpUrl(lead.mapsUrl || '');
+  const emails = audit.allEmails || [];
+  const genericSet = new Set(audit.genericEmails || []);
+  const social = audit.socialLinks || {};
+
+  const socialEntries = [
+    { key: 'instagram', label: 'Instagram' },
+    { key: 'facebook', label: 'Facebook' },
+    { key: 'linkedin', label: 'LinkedIn' },
+    { key: 'tiktok', label: 'TikTok' }
+  ]
+    .map((s) => ({ ...s, href: safeHttpUrl(social[s.key]) }))
+    .filter((s) => Boolean(s.href));
+
+  const phoneHtml = lead.phone
+    ? `<span class="phone-tag ${lead.isWhatsappMobile ? 'mobile' : ''}">${
+        lead.isWhatsappMobile ? '📱 ' : '☎️ '
+      }<a href="tel:${escapeHtml(lead.phone.replace(/\s+/g, ''))}" class="lead-info-link">${escapeHtml(
+        lead.phone
+      )}</a></span>
+       <span class="lead-info-badge ${lead.isWhatsappMobile ? 'mobile' : ''}">${
+         lead.isWhatsappMobile ? 'WhatsApp Móvil' : lead.phoneType === 'landline' ? 'Fijo' : 'Teléfono'
+       }</span>
+       <button type="button" class="btn-copy-inline" data-copy="${escapeHtml(lead.phone)}">📋 Copiar</button>`
+    : '<span class="lead-info-badge danger">Sin teléfono</span>';
+
+  const webHtml = websiteHref
+    ? `<a href="${escapeHtml(websiteHref)}" target="_blank" rel="noopener noreferrer" class="lead-info-link">🌐 ${escapeHtml(
+        websiteHref
+      )} ↗</a>
+       <button type="button" class="btn-copy-inline" data-copy="${escapeHtml(websiteHref)}">📋 Copiar</button>`
+    : '<span class="lead-info-badge danger">❌ Sin sitio web</span>';
+
+  const mapsHtml = mapsHref
+    ? `<a href="${escapeHtml(mapsHref)}" target="_blank" rel="noopener noreferrer" class="lead-info-link">📍 Abrir en Google Maps ↗</a>
+       <button type="button" class="btn-copy-inline" data-copy="${escapeHtml(mapsHref)}">📋 Copiar link</button>`
+    : '<span style="color:#94a3b8;">Sin enlace de Google Maps</span>';
+
+  const emailsHtml =
+    emails.length > 0
+      ? emails
+          .map((email) => {
+            const isGen = genericSet.has(email);
+            return `<span class="lead-info-row">
+              <a href="mailto:${escapeHtml(email)}" class="lead-info-link">✉️ ${escapeHtml(email)}</a>
+              <span class="lead-info-badge ${isGen ? 'generic' : 'mobile'}">${
+              isGen ? 'Genérico' : 'Corporativo'
+            }</span>
+              <button type="button" class="btn-copy-inline" data-copy="${escapeHtml(email)}">📋</button>
+            </span>`;
+          })
+          .join('')
+      : '<span style="color:#94a3b8;">Sin correos detectados</span>';
+
+  const addressText = [lead.address, lead.city].filter(Boolean).join(' · ') || 'Sin dirección registrada';
+
+  els.modalLeadInfoCard.innerHTML = `
+    <div class="lead-info-grid">
+      <div class="lead-info-item">
+        <span class="lead-info-label">📱 Teléfono / WhatsApp</span>
+        <div class="lead-info-row">${phoneHtml}</div>
+      </div>
+      <div class="lead-info-item">
+        <span class="lead-info-label">🌐 Página Web</span>
+        <div class="lead-info-row">${webHtml}</div>
+      </div>
+      <div class="lead-info-item">
+        <span class="lead-info-label">📍 Google Maps y Ubicación</span>
+        <div class="lead-info-row">${mapsHtml}</div>
+        <div class="lead-info-row" style="color:#475569;font-size:0.76rem;">
+          <span>${escapeHtml(addressText)}</span>
+          ${
+            lead.address
+              ? `<button type="button" class="btn-copy-inline" data-copy="${escapeHtml(lead.address)}">📋 Dir.</button>`
+              : ''
+          }
+        </div>
+      </div>
+      <div class="lead-info-item">
+        <span class="lead-info-label">✉️ Correos Detectados (${emails.length})</span>
+        <div style="display:flex;flex-direction:column;gap:0.3rem;">${emailsHtml}</div>
+      </div>
+      ${
+        socialEntries.length > 0
+          ? `<div class="lead-info-item full-width">
+               <span class="lead-info-label">🔗 Redes Sociales</span>
+               <div class="social-links-row">
+                 ${socialEntries
+                   .map(
+                     (s) =>
+                       `<a href="${escapeHtml(s.href)}" target="_blank" rel="noopener noreferrer" class="social-pill">${escapeHtml(
+                         s.label
+                       )} ↗</a>`
+                   )
+                   .join('')}
+               </div>
+             </div>`
+          : ''
+      }
+    </div>
+  `;
+}
+
+// Abrir modal de Ficha Completa, Edición, Pitch y Auditoría
+function openPitchModal(leadId, options = {}) {
+  const { focusSection = 'top', keepEditOpen = false } = options;
   const lead = allLeads.find((l) => l.id === leadId);
   if (!lead) return;
   currentModalLead = lead;
 
-  els.modalLeadName.textContent = lead.cleanName || lead.name;
-  els.modalLeadCategory.textContent = `${lead.category || 'Empresa'} · ${lead.city || 'Colombia'} · Score ${lead.score}/100`;
+  els.modalLeadName.textContent = lead.name || lead.cleanName || 'Negocio';
+  els.modalLeadCategory.textContent = `${lead.category || 'Empresa'} · ${lead.city || 'Colombia'} · Score ${
+    lead.score || 0
+  }/100 (${lead.priority || 'MEDIA'})`;
+
+  const subParts = [`★ ${lead.rating || '—'} (${lead.reviewsCount || 0} reseñas)`];
+  if (lead.cleanName && lead.cleanName !== lead.name) {
+    subParts.push(`Nombre corto en pitch: ${lead.cleanName}`);
+  }
+  if (lead.searchQuery) {
+    subParts.push(`Búsqueda: ${lead.searchQuery}`);
+  }
+  els.modalLeadSub.textContent = subParts.join(' · ');
+
+  renderLeadInfoCard(lead);
+  populateEditLeadInputs(lead);
+
+  if (!keepEditOpen) {
+    els.modalEditLeadPanel.classList.add('hidden');
+    els.btnToggleEditLead.classList.remove('active');
+  }
 
   const audit = lead.audit || {};
   const freshness = getAuditFreshnessInfo(lead);
+  const sslStatusText =
+    audit.urlType === 'NO_WEBSITE'
+      ? 'Sin Sitio Web'
+      : audit.urlType === 'SOCIAL_ONLY'
+      ? `Solo ${audit.hostname}`
+      : audit.reachable
+      ? `${audit.hasValidSsl ? 'HTTPS Seguro' : '⚠️ Sin SSL'} (${audit.loadTimeMs || 0}ms)`
+      : `Caído (${audit.error || 'Error'})`;
+
   els.modalAuditGrid.innerHTML = `
     <div class="audit-item">
       <span class="k">Diagnóstico Principal</span>
-      <span class="v">${escapeHtml(lead.primaryLabel)}</span>
+      <span class="v"><span class="pain-badge-main ${escapeHtml(lead.primaryOpportunity)}" style="margin:2px 0 0;">${escapeHtml(
+    lead.primaryLabel
+  )}</span></span>
     </div>
     <div class="audit-item">
       <span class="k">Plan IVIA Sugerido</span>
       <span class="v">${escapeHtml(lead.recommendedPlan)}</span>
     </div>
     <div class="audit-item">
-      <span class="k">Teléfono / WhatsApp</span>
-      <span class="v">${escapeHtml(lead.phone || 'No registrado')} ${lead.isWhatsappMobile ? '(Móvil)' : ''}</span>
-    </div>
-    <div class="audit-item">
       <span class="k">Estado Web &amp; SSL</span>
-      <span class="v">${
-        audit.urlType === 'NO_WEBSITE'
-          ? 'Sin Sitio Web'
-          : audit.urlType === 'SOCIAL_ONLY'
-          ? `Solo ${audit.hostname}`
-          : audit.reachable
-          ? `${audit.hasValidSsl ? 'HTTPS Seguro' : '⚠️ Sin SSL'} (${audit.loadTimeMs}ms)`
-          : `Caído (${audit.error || 'Error'})`
-      }</span>
+      <span class="v">${escapeHtml(sslStatusText)}</span>
     </div>
     <div class="audit-item">
       <span class="k">Servidor de Correo (MX)</span>
       <span class="v">${escapeHtml(audit.mxProvider || 'Sin dominio propio')}</span>
     </div>
     <div class="audit-item">
-      <span class="k">Correos / Frescura</span>
-      <span class="v ${freshness.stale ? 'audit-stale' : ''}">${escapeHtml(
-        (audit.allEmails || []).join(', ') || 'Sin correo'
-      )} · ${escapeHtml(freshness.label)}</span>
+      <span class="k">Tecnología &amp; Móvil</span>
+      <span class="v">${escapeHtml(audit.cms || 'N/A')} · Móvil: ${
+    audit.hasMobileViewport ? 'Sí' : 'No'
+  } · Botón WA: ${audit.hasWhatsappWidget ? 'Sí' : 'No'}</span>
+    </div>
+    <div class="audit-item">
+      <span class="k">Frescura de Auditoría</span>
+      <span class="v ${freshness.stale ? 'audit-stale' : ''}">${escapeHtml(freshness.label)}</span>
     </div>
   `;
+
+  els.modalPainTags.innerHTML = (lead.painTags || [])
+    .map((t) => `<span class="sub-tag">${escapeHtml(t)}</span>`)
+    .join('');
 
   const count = lead.followUpCount || 0;
   const defaultStage = count === 0 ? 1 : count === 1 ? 2 : count === 2 ? 3 : 4;
@@ -593,6 +781,14 @@ function openPitchModal(leadId) {
   updateModalGcalHref();
 
   els.pitchModal.classList.remove('hidden');
+
+  if (focusSection === 'pitch') {
+    requestAnimationFrame(() => {
+      els.modalPitchSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  } else {
+    els.modalPitchBody.scrollTop = 0;
+  }
 }
 
 // Event Listeners
@@ -670,9 +866,15 @@ els.leadsTbody.addEventListener('change', async (e) => {
 });
 
 els.leadsTbody.addEventListener('click', async (e) => {
+  const detailTrigger = e.target.closest('[data-action="open-detail"]');
+  if (detailTrigger) {
+    openPitchModal(detailTrigger.dataset.id, { focusSection: 'top' });
+    return;
+  }
+
   const pitchBtn = e.target.closest('button[data-action="open-pitch"]');
   if (pitchBtn) {
-    openPitchModal(pitchBtn.dataset.id);
+    openPitchModal(pitchBtn.dataset.id, { focusSection: 'pitch' });
     return;
   }
 
@@ -767,12 +969,99 @@ els.btnCopyPitch.addEventListener('click', async () => {
   }, 1500);
 });
 
+els.modalLeadInfoCard.addEventListener('click', async (e) => {
+  const copyBtn = e.target.closest('.btn-copy-inline');
+  if (!copyBtn) return;
+  const value = copyBtn.dataset.copy || '';
+  if (!value) return;
+  try {
+    await navigator.clipboard.writeText(value);
+    const prev = copyBtn.textContent;
+    copyBtn.textContent = '✅';
+    setTimeout(() => {
+      copyBtn.textContent = prev;
+    }, 1200);
+  } catch (_) {}
+});
+
+els.btnToggleEditLead.addEventListener('click', () => {
+  if (!currentModalLead) return;
+  const isOpening = els.modalEditLeadPanel.classList.contains('hidden');
+  if (isOpening) {
+    populateEditLeadInputs(currentModalLead);
+    els.modalEditLeadPanel.classList.remove('hidden');
+    els.btnToggleEditLead.classList.add('active');
+    els.editLeadName.focus();
+  } else {
+    els.modalEditLeadPanel.classList.add('hidden');
+    els.btnToggleEditLead.classList.remove('active');
+  }
+});
+
+els.btnCancelEditLead.addEventListener('click', () => {
+  if (currentModalLead) populateEditLeadInputs(currentModalLead);
+  els.modalEditLeadPanel.classList.add('hidden');
+  els.btnToggleEditLead.classList.remove('active');
+});
+
+async function saveBusinessFieldsAndMaybeReaudit() {
+  if (!currentModalLead) return null;
+  const payload = getEditedBusinessPayload();
+  const prevWebsite = (currentModalLead.website || '').trim();
+  const websiteChanged = payload.website !== prevWebsite;
+
+  const res = await fetch(`/api/leads/${currentModalLead.id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) return null;
+
+  let { lead } = await res.json();
+
+  if (websiteChanged && payload.website) {
+    const reauditRes = await fetch(`/api/leads/${lead.id}/reaudit`, { method: 'POST' });
+    if (reauditRes.ok) {
+      const reauditData = await reauditRes.json();
+      if (reauditData.lead) lead = reauditData.lead;
+    }
+  }
+
+  const idx = allLeads.findIndex((l) => l.id === lead.id);
+  if (idx >= 0) allLeads[idx] = lead;
+  renderTable();
+  return lead;
+}
+
+els.btnSaveBusinessData.addEventListener('click', async () => {
+  if (!currentModalLead) return;
+  const btn = els.btnSaveBusinessData;
+  const prevText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ Guardando...';
+  try {
+    const updatedLead = await saveBusinessFieldsAndMaybeReaudit();
+    if (updatedLead) {
+      openPitchModal(updatedLead.id, { focusSection: 'top', keepEditOpen: false });
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prevText;
+  }
+});
+
 els.btnSaveLeadModal.addEventListener('click', async () => {
   if (!currentModalLead) return;
+  const editPanelOpen = !els.modalEditLeadPanel.classList.contains('hidden');
+  const prevWebsite = (currentModalLead.website || '').trim();
+  const businessPayload = editPanelOpen ? getEditedBusinessPayload() : {};
+  const websiteChanged = editPanelOpen && businessPayload.website !== prevWebsite;
+
   const res = await fetch(`/api/leads/${currentModalLead.id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
+      ...businessPayload,
       notes: els.modalNotesInput.value,
       crmStatus: els.modalCrmSelect.value,
       nextFollowUpAt: els.modalFollowUpDate.value || null,
@@ -780,7 +1069,14 @@ els.btnSaveLeadModal.addEventListener('click', async () => {
     })
   });
   if (res.ok) {
-    const { lead } = await res.json();
+    let { lead } = await res.json();
+    if (websiteChanged && businessPayload.website) {
+      const reauditRes = await fetch(`/api/leads/${lead.id}/reaudit`, { method: 'POST' });
+      if (reauditRes.ok) {
+        const reauditData = await reauditRes.json();
+        if (reauditData.lead) lead = reauditData.lead;
+      }
+    }
     const idx = allLeads.findIndex((l) => l.id === lead.id);
     if (idx >= 0) allLeads[idx] = lead;
     renderTable();
@@ -836,6 +1132,12 @@ els.btnCloseModal.addEventListener('click', () => {
   els.pitchModal.classList.add('hidden');
 });
 
+els.pitchModal.addEventListener('click', (e) => {
+  if (e.target === els.pitchModal) {
+    els.pitchModal.classList.add('hidden');
+  }
+});
+
 // Modal de Auditoría Individual
 els.btnOpenSingle.addEventListener('click', () => {
   els.singleModal.classList.remove('hidden');
@@ -843,6 +1145,23 @@ els.btnOpenSingle.addEventListener('click', () => {
 
 els.btnCloseSingle.addEventListener('click', () => {
   els.singleModal.classList.add('hidden');
+});
+
+els.singleModal.addEventListener('click', (e) => {
+  if (e.target === els.singleModal) {
+    els.singleModal.classList.add('hidden');
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if (!els.pitchModal.classList.contains('hidden')) {
+      els.pitchModal.classList.add('hidden');
+    }
+    if (!els.singleModal.classList.contains('hidden')) {
+      els.singleModal.classList.add('hidden');
+    }
+  }
 });
 
 els.singleForm.addEventListener('submit', async (e) => {

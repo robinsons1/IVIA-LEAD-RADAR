@@ -352,10 +352,7 @@ async function checkMxRecords(domain) {
 }
 
 async function fetchHtmlWithFallback(targetUrl, timeoutMs = 9500) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
   const startTime = Date.now();
-
   const headers = {
     'User-Agent':
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
@@ -363,68 +360,89 @@ async function fetchHtmlWithFallback(targetUrl, timeoutMs = 9500) {
     'Accept-Language': 'es-CO,es;q=0.9,en;q=0.8'
   };
 
-  try {
-    const res = await fetch(targetUrl, {
-      method: 'GET',
-      headers,
-      redirect: 'follow',
-      signal: controller.signal
-    });
-    const html = await res.text();
-    clearTimeout(timer);
-    const loadTimeMs = Date.now() - startTime;
-    const finalUrl = res.url || targetUrl;
-    const hasValidSsl = finalUrl.toLowerCase().startsWith('https://');
-
-    return {
-      reachable: res.status < 400,
-      statusCode: res.status,
-      loadTimeMs,
-      finalUrl,
-      hasValidSsl,
-      html,
-      error: res.status >= 400 ? `HTTP ${res.status}` : null
-    };
-  } catch (err) {
-    clearTimeout(timer);
-    // Si falló con HTTPS (ej. error de certificado SSL), probamos con HTTP para distinguir "Sin SSL" de "Sitio Caído"
-    if (targetUrl.toLowerCase().startsWith('https://')) {
-      const httpUrl = targetUrl.replace(/^https:\/\//i, 'http://');
-      const ctrl2 = new AbortController();
-      const timer2 = setTimeout(() => ctrl2.abort(), 7000);
-      try {
-        const resHttp = await fetch(httpUrl, {
-          method: 'GET',
-          headers,
-          redirect: 'follow',
-          signal: ctrl2.signal
-        });
-        const htmlHttp = await resHttp.text();
-        clearTimeout(timer2);
-        return {
-          reachable: resHttp.status < 400,
-          statusCode: resHttp.status,
-          loadTimeMs: Date.now() - startTime,
-          finalUrl: resHttp.url || httpUrl,
-          hasValidSsl: false,
-          html: htmlHttp,
-          error: 'Sin certificado SSL válido (Solo HTTP)'
-        };
-      } catch (err2) {
-        clearTimeout(timer2);
-      }
+  async function attemptFetch(url, ms) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ms);
+    try {
+      const res = await fetch(url, {
+        method: 'GET',
+        headers,
+        redirect: 'follow',
+        signal: controller.signal
+      });
+      const html = await res.text();
+      return {
+        status: res.status,
+        finalUrl: res.url || url,
+        html,
+        loadTimeMs: Date.now() - startTime
+      };
+    } finally {
+      clearTimeout(timer);
     }
+  }
 
+  const primaryHttpsUrl = targetUrl.replace(/^http:\/\//i, 'https://');
+  const httpFallbackUrl = targetUrl.replace(/^https:\/\//i, 'http://');
+  let httpsAttempt = null;
+
+  try {
+    httpsAttempt = await attemptFetch(primaryHttpsUrl, timeoutMs);
+    const hasValidSsl = httpsAttempt.finalUrl.toLowerCase().startsWith('https://');
+    if (httpsAttempt.status < 400) {
+      return {
+        reachable: true,
+        statusCode: httpsAttempt.status,
+        loadTimeMs: httpsAttempt.loadTimeMs,
+        finalUrl: httpsAttempt.finalUrl,
+        hasValidSsl,
+        html: httpsAttempt.html,
+        error: hasValidSsl ? null : 'Sin certificado SSL válido (Redirige a HTTP)'
+      };
+    }
+  } catch (err) {
+    httpsAttempt = { error: err };
+  }
+
+  // Si HTTPS falló (error de certificado/puerto 443) o devolvió >= 400, probamos con HTTP
+  try {
+    const httpRes = await attemptFetch(httpFallbackUrl, 7000);
+    const redirectedToHttps = httpRes.finalUrl.toLowerCase().startsWith('https://');
+    if (httpRes.status < 400) {
+      return {
+        reachable: true,
+        statusCode: httpRes.status,
+        loadTimeMs: Date.now() - startTime,
+        finalUrl: httpRes.finalUrl,
+        hasValidSsl: redirectedToHttps,
+        html: httpRes.html,
+        error: redirectedToHttps ? null : 'Sin certificado SSL válido (Solo HTTP)'
+      };
+    }
+  } catch (_) {}
+
+  if (httpsAttempt && typeof httpsAttempt.status === 'number') {
     return {
       reachable: false,
-      statusCode: 0,
-      loadTimeMs: Date.now() - startTime,
-      finalUrl: targetUrl,
-      hasValidSsl: false,
-      html: '',
-      error: err.cause?.code || err.message || 'Sitio caído o dominio vencido'
+      statusCode: httpsAttempt.status,
+      loadTimeMs: httpsAttempt.loadTimeMs,
+      finalUrl: httpsAttempt.finalUrl,
+      hasValidSsl: httpsAttempt.finalUrl.toLowerCase().startsWith('https://'),
+      html: httpsAttempt.html || '',
+      error: `HTTP ${httpsAttempt.status}`
     };
   }
+
+  const err = httpsAttempt?.error;
+  return {
+    reachable: false,
+    statusCode: 0,
+    loadTimeMs: Date.now() - startTime,
+    finalUrl: targetUrl,
+    hasValidSsl: false,
+    html: '',
+    error: err?.cause?.code || err?.message || 'Sitio caído o dominio vencido'
+  };
 }
 
 /**
@@ -524,6 +542,16 @@ async function auditBusinessWebsite(rawUrl) {
   baseAudit.error = fetchResult.error;
   baseAudit.hasMxRecords = mxResult.hasMx;
   baseAudit.mxProvider = mxResult.mxProvider;
+
+  if (
+    baseAudit.urlType === 'CUSTOM_DOMAIN' &&
+    fetchResult.reachable &&
+    fetchResult.hasValidSsl &&
+    fetchResult.finalUrl &&
+    fetchResult.finalUrl.toLowerCase().startsWith('https://')
+  ) {
+    baseAudit.normalizedUrl = fetchResult.finalUrl;
+  }
 
   if (!fetchResult.html) {
     return baseAudit;

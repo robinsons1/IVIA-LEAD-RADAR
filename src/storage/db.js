@@ -213,6 +213,18 @@ function updateLeadCrm(id, updates) {
   if (Array.isArray(updates.contactHistory)) allowed.contactHistory = updates.contactHistory;
   if (typeof updates.customPitch === 'string') allowed.customPitch = updates.customPitch;
 
+  const editableBusinessFields = ['name', 'category', 'city', 'address', 'phone', 'website', 'mapsUrl'];
+  let businessInfoChanged = false;
+  for (const field of editableBusinessFields) {
+    if (typeof updates[field] === 'string') {
+      const trimmed = updates[field].trim();
+      if (trimmed !== (existing[field] || '')) {
+        businessInfoChanged = true;
+      }
+      allowed[field] = trimmed;
+    }
+  }
+
   if (updates.recordContact && typeof updates.recordContact === 'object') {
     const rc = updates.recordContact;
     const prevCount = typeof existing.followUpCount === 'number' ? existing.followUpCount : 0;
@@ -261,11 +273,54 @@ function updateLeadCrm(id, updates) {
     }
   }
 
-  leads[idx] = {
+  let updatedLead = {
     ...existing,
     ...allowed,
     updatedAt: nowIso
   };
+
+  if (businessInfoChanged) {
+    let mergedAudit = existing.audit ? { ...existing.audit } : null;
+    if (typeof allowed.website === 'string' && allowed.website !== (existing.website || '')) {
+      if (!allowed.website) {
+        mergedAudit = {
+          ...(mergedAudit || {}),
+          urlType: 'NO_WEBSITE',
+          normalizedUrl: '',
+          hostname: '',
+          reachable: false,
+          hasValidSsl: false
+        };
+      } else {
+        const { classifyWebsiteUrl } = require('../scraper/websiteAuditor');
+        const classified = classifyWebsiteUrl(allowed.website);
+        mergedAudit = {
+          ...(mergedAudit || {}),
+          urlType: classified.type,
+          normalizedUrl: classified.normalizedUrl,
+          hostname: classified.hostname
+        };
+      }
+    }
+
+    const { scoreAndBuildPitch } = require('../scraper/leadScorer');
+    const scored = scoreAndBuildPitch(updatedLead, mergedAudit);
+    updatedLead = {
+      ...updatedLead,
+      ...scored,
+      audit: mergedAudit,
+      crmStatus: updatedLead.crmStatus || 'nuevo',
+      notes: updatedLead.notes || '',
+      firstContactedAt: updatedLead.firstContactedAt || null,
+      lastContactedAt: updatedLead.lastContactedAt || null,
+      followUpCount: typeof updatedLead.followUpCount === 'number' ? updatedLead.followUpCount : 0,
+      nextFollowUpAt: updatedLead.nextFollowUpAt !== undefined ? updatedLead.nextFollowUpAt : null,
+      contactHistory: Array.isArray(updatedLead.contactHistory) ? updatedLead.contactHistory : [],
+      customPitch: updatedLead.customPitch
+    };
+  }
+
+  leads[idx] = updatedLead;
   saveLeads(leads);
   return leads[idx];
 }

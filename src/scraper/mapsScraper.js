@@ -308,8 +308,31 @@ async function runLeadPipeline(options = {}, onEvent = null) {
           audit
         };
 
-        const { lead: savedLead, isNew } = upsertLead(fullLead);
+        const { lead: savedLead, isNew, auditChange } = upsertLead(fullLead, {
+          source: 'scrape',
+          markUnread: true
+        });
         results.push(savedLead);
+
+        if (!isNew && auditChange) {
+          if (auditChange.kind === 'worsened') {
+            logMessage(
+              'warn',
+              `🔔 CAMBIO (Oportunidad ↑) en ${savedLead.name}: ${auditChange.summary}`,
+              emit
+            );
+          } else if (auditChange.kind === 'improved') {
+            logMessage(
+              'info',
+              `📉 CAMBIO (Mejoró) en ${savedLead.name}: ${auditChange.summary}`,
+              emit
+            );
+          } else {
+            logMessage('info', `🔄 CAMBIO en ${savedLead.name}: ${auditChange.summary}`, emit);
+          }
+        } else if (!isNew) {
+          logMessage('info', `   ↳ Ya existía en base local (sin cambios en auditoría/score).`, emit);
+        }
 
         progress.completedUrls.push(placeUrl);
         progress.lastIndex = i;
@@ -320,6 +343,7 @@ async function runLeadPipeline(options = {}, onEvent = null) {
           type: 'lead',
           lead: savedLead,
           isNew,
+          auditChange: auditChange || null,
           job: getJobStatus()
         });
 

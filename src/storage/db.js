@@ -140,9 +140,100 @@ function saveLeads(leads) {
 }
 
 /**
+ * Detecta si una nueva auditoría cambió la condición digital o el puntaje de un prospecto existente
+ */
+function computeAuditChange(existing, incoming, source = 'scrape') {
+  if (!existing || !incoming) return null;
+
+  const prevScore = Number(existing.score) || 0;
+  const newScore = Number(incoming.score) || 0;
+  const scoreDelta = newScore - prevScore;
+
+  const prevOpportunity = existing.primaryOpportunity || '';
+  const newOpportunity = incoming.primaryOpportunity || '';
+  const prevLabel = existing.primaryLabel || prevOpportunity || 'Sin diagnóstico';
+  const newLabel = incoming.primaryLabel || newOpportunity || 'Sin diagnóstico';
+
+  const prevAudit = existing.audit || {};
+  const newAudit = incoming.audit || {};
+
+  const reasons = [];
+  let worsenedSignals = 0;
+  let improvedSignals = 0;
+
+  const isWebType = (t) => t === 'CUSTOM_DOMAIN' || t === 'FREE_BUILDER';
+  if (isWebType(prevAudit.urlType) && isWebType(newAudit.urlType)) {
+    if (prevAudit.reachable && !newAudit.reachable) {
+      reasons.push('Web pasó a Caída');
+      worsenedSignals++;
+    } else if (!prevAudit.reachable && newAudit.reachable) {
+      reasons.push('Web volvió a cargar');
+      improvedSignals++;
+    }
+
+    if (prevAudit.hasValidSsl && !newAudit.hasValidSsl && newAudit.reachable) {
+      reasons.push('Perdió certificado SSL');
+      worsenedSignals++;
+    } else if (!prevAudit.hasValidSsl && newAudit.hasValidSsl && newAudit.reachable) {
+      reasons.push('Activó certificado SSL');
+      improvedSignals++;
+    }
+  }
+
+  if (prevAudit.urlType && prevAudit.urlType !== 'NO_WEBSITE' && newAudit.urlType === 'NO_WEBSITE') {
+    reasons.push('Se quedó sin sitio web');
+    worsenedSignals++;
+  } else if (prevAudit.urlType === 'NO_WEBSITE' && newAudit.urlType && newAudit.urlType !== 'NO_WEBSITE') {
+    reasons.push('Agregó sitio web');
+    improvedSignals++;
+  }
+
+  if (!existing.isWhatsappMobile && incoming.isWhatsappMobile) {
+    reasons.push('Ahora tiene WhatsApp móvil');
+  }
+
+  if (prevOpportunity && newOpportunity && prevOpportunity !== newOpportunity && reasons.length === 0) {
+    reasons.push(`Diagnóstico: ${prevLabel} → ${newLabel}`);
+  }
+
+  if (scoreDelta === 0 && reasons.length === 0 && prevOpportunity === newOpportunity) {
+    return null;
+  }
+
+  let kind = 'changed';
+  if (worsenedSignals > 0 || scoreDelta > 0) {
+    kind = 'worsened';
+  } else if (improvedSignals > 0 || scoreDelta < 0) {
+    kind = 'improved';
+  }
+
+  const scorePart =
+    scoreDelta !== 0
+      ? `Score ${prevScore} → ${newScore} (${scoreDelta > 0 ? '+' : ''}${scoreDelta})`
+      : `Score ${newScore}`;
+  const reasonPart = reasons.slice(0, 2).join(' · ');
+  const summary = reasonPart ? `${scorePart} · ${reasonPart}` : scorePart;
+
+  return {
+    date: new Date().toISOString(),
+    source,
+    prevScore,
+    newScore,
+    scoreDelta,
+    prevOpportunity,
+    newOpportunity,
+    prevLabel,
+    newLabel,
+    kind,
+    reasons,
+    summary
+  };
+}
+
+/**
  * Inserta o actualiza un prospecto preservando su estado CRM y notas si ya existía
  */
-function upsertLead(leadData) {
+function upsertLead(leadData, options = {}) {
   const leads = loadLeads();
   const key = generateLeadKey(leadData);
   const existingIdx = leads.findIndex(
@@ -153,6 +244,13 @@ function upsertLead(leadData) {
 
   if (existingIdx >= 0) {
     const existing = leads[existingIdx];
+    const auditChange = computeAuditChange(existing, leadData, options.source || 'scrape');
+    const prevHistory = Array.isArray(existing.auditHistory) ? [...existing.auditHistory] : [];
+    const auditHistory = auditChange ? [...prevHistory, auditChange].slice(-15) : prevHistory;
+    const hasUnreadAuditChange = auditChange
+      ? options.markUnread !== false
+      : Boolean(existing.hasUnreadAuditChange);
+
     const updated = {
       ...existing,
       ...leadData,
@@ -166,13 +264,16 @@ function upsertLead(leadData) {
       nextFollowUpAt: existing.nextFollowUpAt !== undefined ? existing.nextFollowUpAt : null,
       contactHistory: Array.isArray(existing.contactHistory) ? existing.contactHistory : [],
       customPitch: existing.customPitch,
+      auditHistory,
+      lastAuditChange: auditChange || existing.lastAuditChange || null,
+      hasUnreadAuditChange,
       auditedAt: leadData.auditedAt || now,
       createdAt: existing.createdAt || now,
       updatedAt: now
     };
     leads[existingIdx] = updated;
     saveLeads(leads);
-    return { lead: updated, isNew: false };
+    return { lead: updated, isNew: false, auditChange };
   } else {
     const newLead = {
       id: crypto.randomUUID(),
@@ -184,6 +285,9 @@ function upsertLead(leadData) {
       followUpCount: 0,
       nextFollowUpAt: null,
       contactHistory: [],
+      auditHistory: [],
+      lastAuditChange: null,
+      hasUnreadAuditChange: false,
       auditedAt: now,
       createdAt: now,
       updatedAt: now,
@@ -191,7 +295,7 @@ function upsertLead(leadData) {
     };
     leads.unshift(newLead);
     saveLeads(leads);
-    return { lead: newLead, isNew: true };
+    return { lead: newLead, isNew: true, auditChange: null };
   }
 }
 
@@ -212,6 +316,9 @@ function updateLeadCrm(id, updates) {
   if (updates.nextFollowUpAt !== undefined) allowed.nextFollowUpAt = updates.nextFollowUpAt;
   if (Array.isArray(updates.contactHistory)) allowed.contactHistory = updates.contactHistory;
   if (typeof updates.customPitch === 'string') allowed.customPitch = updates.customPitch;
+  if (typeof updates.hasUnreadAuditChange === 'boolean') {
+    allowed.hasUnreadAuditChange = updates.hasUnreadAuditChange;
+  }
 
   const editableBusinessFields = ['name', 'category', 'city', 'address', 'phone', 'website', 'mapsUrl'];
   let businessInfoChanged = false;
@@ -316,7 +423,13 @@ function updateLeadCrm(id, updates) {
       followUpCount: typeof updatedLead.followUpCount === 'number' ? updatedLead.followUpCount : 0,
       nextFollowUpAt: updatedLead.nextFollowUpAt !== undefined ? updatedLead.nextFollowUpAt : null,
       contactHistory: Array.isArray(updatedLead.contactHistory) ? updatedLead.contactHistory : [],
-      customPitch: updatedLead.customPitch
+      customPitch: updatedLead.customPitch,
+      auditHistory: Array.isArray(existing.auditHistory) ? existing.auditHistory : [],
+      lastAuditChange: existing.lastAuditChange || null,
+      hasUnreadAuditChange:
+        typeof allowed.hasUnreadAuditChange === 'boolean'
+          ? allowed.hasUnreadAuditChange
+          : Boolean(existing.hasUnreadAuditChange)
     };
   }
 
@@ -325,13 +438,19 @@ function updateLeadCrm(id, updates) {
   return leads[idx];
 }
 
-function updateLeadFull(id, freshLeadData) {
+function updateLeadFull(id, freshLeadData, options = {}) {
   const leads = loadLeads();
   const idx = leads.findIndex((l) => l.id === id);
   if (idx === -1) return null;
 
   const existing = leads[idx];
   const nowIso = new Date().toISOString();
+  const auditChange = computeAuditChange(existing, freshLeadData, options.source || 'reaudit');
+  const prevHistory = Array.isArray(existing.auditHistory) ? [...existing.auditHistory] : [];
+  const auditHistory = auditChange ? [...prevHistory, auditChange].slice(-15) : prevHistory;
+  const hasUnreadAuditChange = auditChange
+    ? options.markUnread === true
+    : Boolean(existing.hasUnreadAuditChange);
 
   leads[idx] = {
     ...existing,
@@ -346,6 +465,9 @@ function updateLeadFull(id, freshLeadData) {
     nextFollowUpAt: existing.nextFollowUpAt !== undefined ? existing.nextFollowUpAt : null,
     contactHistory: Array.isArray(existing.contactHistory) ? existing.contactHistory : [],
     customPitch: existing.customPitch,
+    auditHistory,
+    lastAuditChange: auditChange || existing.lastAuditChange || null,
+    hasUnreadAuditChange,
     createdAt: existing.createdAt || nowIso,
     auditedAt: nowIso,
     updatedAt: nowIso
@@ -468,6 +590,9 @@ function rescoreAndMigrateLeads(options = {}) {
       followUpCount,
       nextFollowUpAt,
       contactHistory,
+      auditHistory: Array.isArray(lead.auditHistory) ? lead.auditHistory : [],
+      lastAuditChange: lead.lastAuditChange || null,
+      hasUnreadAuditChange: Boolean(lead.hasUnreadAuditChange),
       auditedAt: lead.auditedAt || lead.updatedAt || lead.createdAt || new Date().toISOString()
     };
   });
@@ -528,6 +653,7 @@ module.exports = {
   getDefaultFollowUpDays,
   loadLeads,
   saveLeads,
+  computeAuditChange,
   upsertLead,
   updateLeadCrm,
   updateLeadFull,

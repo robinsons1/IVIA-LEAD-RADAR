@@ -70,7 +70,9 @@ function computeStats(leads) {
           (l.audit?.corporateEmails?.length || 0) === 0)
     ).length,
     withWhatsappMobile: leads.filter((l) => l.isWhatsappMobile).length,
-    contacted: leads.filter((l) => l.crmStatus && l.crmStatus !== 'nuevo').length
+    contacted: leads.filter((l) => l.crmStatus && l.crmStatus !== 'nuevo').length,
+    withAuditChanges: leads.filter((l) => Boolean(l.lastAuditChange)).length,
+    unreadAuditChanges: leads.filter((l) => Boolean(l.hasUnreadAuditChange)).length
   };
 }
 
@@ -181,10 +183,19 @@ app.post('/api/audit-single', async (req, res) => {
     };
 
     const scored = scoreAndBuildPitch(rawLead, audit);
-    const { lead } = upsertLead({ ...rawLead, ...scored, audit });
-    broadcastEvent({ type: 'lead', lead, isNew: true, job: getJobStatus() });
+    const { lead, isNew, auditChange } = upsertLead(
+      { ...rawLead, ...scored, audit },
+      { source: 'manual', markUnread: true }
+    );
+    broadcastEvent({
+      type: 'lead',
+      lead,
+      isNew,
+      auditChange: auditChange || null,
+      job: getJobStatus()
+    });
 
-    res.json({ ok: true, lead });
+    res.json({ ok: true, lead, auditChange: auditChange || null });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -208,15 +219,29 @@ app.post('/api/leads/:id/reaudit', async (req, res) => {
       return res.status(404).json({ error: 'Prospecto no encontrado' });
     }
 
+    const prevHistoryLen = Array.isArray(existing.auditHistory) ? existing.auditHistory.length : 0;
     const freshAudit = await auditBusinessWebsite(existing.website || '');
     const scored = scoreAndBuildPitch(existing, freshAudit);
-    const updated = updateLeadFull(existing.id, {
-      ...scored,
-      audit: freshAudit
-    });
+    const updated = updateLeadFull(
+      existing.id,
+      {
+        ...scored,
+        audit: freshAudit
+      },
+      { source: 'reaudit', markUnread: false }
+    );
 
-    broadcastEvent({ type: 'lead', lead: updated, isNew: false, job: getJobStatus() });
-    res.json({ ok: true, lead: updated });
+    const newHistoryLen = Array.isArray(updated.auditHistory) ? updated.auditHistory.length : 0;
+    const auditChange = newHistoryLen > prevHistoryLen ? updated.lastAuditChange : null;
+
+    broadcastEvent({
+      type: 'lead',
+      lead: updated,
+      isNew: false,
+      auditChange: auditChange || null,
+      job: getJobStatus()
+    });
+    res.json({ ok: true, lead: updated, auditChange: auditChange || null });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

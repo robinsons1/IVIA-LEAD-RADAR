@@ -35,6 +35,9 @@ const els = {
   statBroken: document.getElementById('stat-broken'),
   statGmail: document.getElementById('stat-generic-email'),
   statWhatsapp: document.getElementById('stat-whatsapp'),
+  kpiCardChanges: document.getElementById('kpi-card-changes'),
+  statAuditChanges: document.getElementById('stat-audit-changes'),
+  badgeAuditChanges: document.getElementById('badge-audit-changes'),
   // Modal Pitch / Detalle / Edición
   pitchModal: document.getElementById('pitch-modal'),
   modalPitchBody: document.getElementById('modal-pitch-body'),
@@ -57,6 +60,7 @@ const els = {
   btnSaveBusinessData: document.getElementById('btn-save-business-data'),
   modalAuditGrid: document.getElementById('modal-audit-grid'),
   modalPainTags: document.getElementById('modal-pain-tags'),
+  modalAuditHistory: document.getElementById('modal-audit-history'),
   modalPitchSection: document.getElementById('modal-pitch-section'),
   modalPitchTextarea: document.getElementById('modal-pitch-textarea'),
   modalFollowUpDate: document.getElementById('modal-followup-date'),
@@ -68,6 +72,8 @@ const els = {
   btnSendEmailModal: document.getElementById('btn-send-email-modal'),
   btnSaveLeadModal: document.getElementById('btn-save-lead-modal'),
   btnSendWhatsappModal: document.getElementById('btn-send-whatsapp-modal'),
+  // Toast notifications
+  toastStack: document.getElementById('toast-stack'),
   // Modal Single Audit
   singleModal: document.getElementById('single-audit-modal'),
   btnOpenSingle: document.getElementById('btn-open-single-audit'),
@@ -171,6 +177,38 @@ function isLeadGenericEmailOnly(lead) {
   );
 }
 
+function showToast({ title, message, variant = 'info', leadId = null }) {
+  if (!els.toastStack) return;
+  const toast = document.createElement('div');
+  toast.className = `toast-item ${variant}`;
+  toast.innerHTML = `
+    <div class="toast-content">
+      <div class="toast-title">${escapeHtml(title)}</div>
+      <div class="toast-message">${escapeHtml(message)}</div>
+    </div>
+    <button type="button" class="toast-close" aria-label="Cerrar">&times;</button>
+  `;
+
+  let timer = setTimeout(() => toast.remove(), 7000);
+  toast.addEventListener('click', (e) => {
+    if (e.target.closest('.toast-close')) {
+      clearTimeout(timer);
+      toast.remove();
+      return;
+    }
+    if (leadId) {
+      clearTimeout(timer);
+      toast.remove();
+      openPitchModal(leadId, { focusSection: 'top' });
+    }
+  });
+
+  els.toastStack.appendChild(toast);
+  while (els.toastStack.children.length > 4) {
+    els.toastStack.firstElementChild.remove();
+  }
+}
+
 function appendConsoleLog(level, message) {
   const div = document.createElement('div');
   div.className = `log-entry ${level || 'info'}`;
@@ -222,6 +260,27 @@ function renderStats() {
   els.statBroken.textContent = allLeads.filter((l) => isLeadBrokenOrInsecure(l)).length;
   els.statGmail.textContent = allLeads.filter((l) => isLeadGenericEmailOnly(l)).length;
   els.statWhatsapp.textContent = allLeads.filter((l) => l.isWhatsappMobile).length;
+
+  const changedCount = allLeads.filter((l) => Boolean(l.lastAuditChange)).length;
+  const unreadChanges = allLeads.filter((l) => Boolean(l.hasUnreadAuditChange)).length;
+  if (els.statAuditChanges) {
+    els.statAuditChanges.textContent = changedCount;
+  }
+  if (els.kpiCardChanges && els.badgeAuditChanges) {
+    if (unreadChanges > 0) {
+      els.kpiCardChanges.classList.add('has-due');
+      els.badgeAuditChanges.className = 'kpi-badge amber';
+      els.badgeAuditChanges.textContent = `${unreadChanges} ${unreadChanges === 1 ? 'nuevo' : 'nuevos'}`;
+    } else if (changedCount > 0) {
+      els.kpiCardChanges.classList.remove('has-due');
+      els.badgeAuditChanges.className = 'kpi-badge blue';
+      els.badgeAuditChanges.textContent = 'Revisados';
+    } else {
+      els.kpiCardChanges.classList.remove('has-due');
+      els.badgeAuditChanges.className = 'kpi-badge slate';
+      els.badgeAuditChanges.textContent = 'Sin cambios';
+    }
+  }
 }
 
 function getFilteredLeads() {
@@ -237,6 +296,7 @@ function getFilteredLeads() {
     if (activeFilter === 'BROKEN_OR_INSECURE' && !isLeadBrokenOrInsecure(lead)) return false;
     if (activeFilter === 'GENERIC_EMAIL' && !isLeadGenericEmailOnly(lead)) return false;
     if (activeFilter === 'WHATSAPP_MOBILE' && !lead.isWhatsappMobile) return false;
+    if (activeFilter === 'AUDIT_CHANGED' && !lead.lastAuditChange) return false;
 
     if (crmFilter !== 'ALL' && (lead.crmStatus || 'nuevo') !== crmFilter) return false;
 
@@ -251,6 +311,7 @@ function getFilteredLeads() {
         lead.website,
         lead.primaryLabel,
         lead.notes,
+        lead.lastAuditChange?.summary,
         ...(lead.audit?.allEmails || [])
       ]
         .join(' ')
@@ -262,6 +323,18 @@ function getFilteredLeads() {
   });
 
   filtered.sort((a, b) => {
+    if (sortBy === 'audit_change') {
+      const aHas = a.lastAuditChange ? 1 : 0;
+      const bHas = b.lastAuditChange ? 1 : 0;
+      if (aHas !== bHas) return bHas - aHas;
+      const aUnread = a.hasUnreadAuditChange ? 1 : 0;
+      const bUnread = b.hasUnreadAuditChange ? 1 : 0;
+      if (aUnread !== bUnread) return bUnread - aUnread;
+      if (aHas && bHas) {
+        return new Date(b.lastAuditChange.date || 0) - new Date(a.lastAuditChange.date || 0);
+      }
+      return (b.score || 0) - (a.score || 0);
+    }
     if (sortBy === 'followup_due') {
       const aDue = isLeadDueFollowUp(a, today) ? 1 : 0;
       const bDue = isLeadDueFollowUp(b, today) ? 1 : 0;
@@ -316,7 +389,7 @@ function renderTable() {
   if (list.length === 0) {
     els.leadsTbody.innerHTML = `
       <tr>
-        <td colspan="7" class="empty-state">
+        <td colspan="6" class="empty-state">
           No hay prospectos que coincidan con este filtro.
         </td>
       </tr>
@@ -327,16 +400,34 @@ function renderTable() {
   els.leadsTbody.innerHTML = list
     .map((lead) => {
       const emails = lead.audit?.allEmails || [];
-      const websiteDisplay = lead.audit?.normalizedUrl || lead.website;
-      const tagsHtml = (lead.painTags || [])
-        .slice(0, 4)
-        .map((t) => `<span class="sub-tag">${escapeHtml(t)}</span>`)
-        .join('');
+      const websiteDisplay = safeHttpUrl(lead.audit?.normalizedUrl || lead.website);
+      const painTags = lead.painTags || [];
+      const visibleTags = painTags.slice(0, 2);
+      const extraTagsCount = Math.max(0, painTags.length - visibleTags.length);
+      const tagsHtml =
+        visibleTags.map((t) => `<span class="sub-tag">${escapeHtml(t)}</span>`).join('') +
+        (extraTagsCount > 0 ? `<span class="sub-tag sub-tag-more">+${extraTagsCount}</span>` : '');
 
       const isDue = isLeadDueFollowUp(lead, today);
       const nextTouch = Math.min(4, (lead.followUpCount || 0) + 1);
       const actionBtnClass = isDue ? 'btn-followup' : 'btn-whatsapp';
-      const actionBtnText = isDue ? `🔔 Seguim. T${nextTouch}` : '💬 Pitch / WhatsApp';
+      const actionBtnText = isDue ? `🔔 Seguim. T${nextTouch}` : '💬 Pitch / WA';
+
+      const lastChange = lead.lastAuditChange;
+      let changePillHtml = '';
+      let changeInlineHtml = '';
+      if (lastChange) {
+        const delta = Number(lastChange.scoreDelta) || 0;
+        const deltaLabel = delta > 0 ? `+${delta}` : delta < 0 ? `${delta}` : lastChange.kind === 'worsened' ? '↑' : '↓';
+        const icon = lastChange.kind === 'worsened' ? '🔺' : lastChange.kind === 'improved' ? '🔻' : '🔄';
+        const unreadCls = lead.hasUnreadAuditChange ? 'unread' : '';
+        changePillHtml = `<div class="change-pill ${escapeHtml(lastChange.kind)} ${unreadCls}" title="${escapeHtml(lastChange.summary)}">${icon} ${escapeHtml(deltaLabel)}</div>`;
+        if (lead.hasUnreadAuditChange) {
+          changeInlineHtml = `<div class="change-inline-badge ${escapeHtml(lastChange.kind)}" title="${escapeHtml(lastChange.summary)}">${
+            lastChange.kind === 'worsened' ? '🔔 Empeoró · Ver cambio' : '🔔 Cambio detectado'
+          }</div>`;
+        }
+      }
 
       return `
         <tr data-id="${escapeHtml(lead.id)}">
@@ -345,6 +436,7 @@ function renderTable() {
               <span class="num">${lead.score || 0}</span>
               <span class="lbl">${escapeHtml(lead.priority || 'MEDIA')}</span>
             </div>
+            ${changePillHtml}
           </td>
           <td>
             <div class="biz-title biz-title-link" data-action="open-detail" data-id="${escapeHtml(lead.id)}" title="Ver ficha completa y editar">${escapeHtml(lead.name)}</div>
@@ -356,7 +448,7 @@ function renderTable() {
               <span>${escapeHtml(lead.city || '')}</span>
               ${
                 lead.mapsUrl
-                  ? `<a href="${escapeHtml(lead.mapsUrl)}" target="_blank" style="color:#2563eb;text-decoration:none;font-weight:600;">Maps ↗</a>`
+                  ? `<a href="${escapeHtml(safeHttpUrl(lead.mapsUrl))}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;text-decoration:none;font-weight:600;">Maps ↗</a>`
                   : ''
               }
             </div>
@@ -365,10 +457,9 @@ function renderTable() {
             <span class="pain-badge-main ${escapeHtml(lead.primaryOpportunity)}">
               ${escapeHtml(lead.primaryLabel)}
             </span>
+            <div class="plan-suggestion-inline" title="${escapeHtml(lead.recommendedPlan)}">${escapeHtml(lead.recommendedPlan)}</div>
             <div class="sub-tags">${tagsHtml}</div>
-          </td>
-          <td>
-            <div class="plan-suggestion">${escapeHtml(lead.recommendedPlan)}</div>
+            ${changeInlineHtml}
           </td>
           <td>
             <div class="contact-list">
@@ -381,12 +472,12 @@ function renderTable() {
               }
               ${
                 emails.length > 0
-                  ? `<span style="color:#2563eb;font-weight:600;">✉️ ${escapeHtml(emails[0])}</span>`
+                  ? `<span class="contact-truncate" title="${escapeHtml(emails[0])}" style="color:#2563eb;font-weight:600;">✉️ ${escapeHtml(emails[0])}</span>`
                   : ''
               }
               ${
                 websiteDisplay
-                  ? `<a href="${escapeHtml(websiteDisplay)}" target="_blank" style="color:#64748b;font-size:0.74rem;text-overflow:ellipsis;overflow:hidden;max-width:190px;white-space:nowrap;">🌐 ${escapeHtml(
+                  ? `<a href="${escapeHtml(websiteDisplay)}" target="_blank" rel="noopener noreferrer" class="contact-truncate" title="${escapeHtml(websiteDisplay)}" style="color:#64748b;font-size:0.74rem;">🌐 ${escapeHtml(
                       lead.audit?.hostname || websiteDisplay
                     )}</a>`
                   : '<span style="color:#dc2626;font-size:0.73rem;font-weight:700;">❌ Sin sitio web</span>'
@@ -406,15 +497,17 @@ function renderTable() {
           </td>
           <td style="text-align:right;">
             <div class="action-group">
-              <button type="button" class="btn btn-outline btn-sm" data-action="open-detail" data-id="${escapeHtml(lead.id)}" title="Ver toda la información y editar datos">
-                ✏️ Ver / Editar
-              </button>
               <button type="button" class="btn ${actionBtnClass} btn-sm" data-action="open-pitch" data-id="${escapeHtml(lead.id)}">
                 ${actionBtnText}
               </button>
-              <button type="button" class="btn btn-ghost-danger btn-sm" data-action="delete-lead" data-id="${escapeHtml(lead.id)}" title="Eliminar">
-                &times;
-              </button>
+              <div class="action-subrow">
+                <button type="button" class="btn btn-outline btn-sm btn-edit-row" data-action="open-detail" data-id="${escapeHtml(lead.id)}" title="Ver toda la información y editar datos">
+                  ✏️ Ver / Editar
+                </button>
+                <button type="button" class="btn btn-ghost-danger btn-sm btn-del-row" data-action="delete-lead" data-id="${escapeHtml(lead.id)}" title="Eliminar">
+                  &times;
+                </button>
+              </div>
             </div>
           </td>
         </tr>
@@ -453,6 +546,16 @@ function connectSse() {
           allLeads.unshift(payload.lead);
         }
         renderTable();
+
+        if (payload.auditChange) {
+          const isHot = payload.auditChange.kind === 'worsened';
+          showToast({
+            title: isHot ? '🔔 Oportunidad aumentó' : '🔄 Cambio en auditoría',
+            message: `${payload.lead.name}: ${payload.auditChange.summary}`,
+            variant: isHot ? 'warn' : 'info',
+            leadId: payload.lead.id
+          });
+        }
       }
     } catch (_) {}
   };
@@ -687,6 +790,60 @@ function renderLeadInfoCard(lead) {
   `;
 }
 
+function renderAuditHistory(lead) {
+  const history = Array.isArray(lead.auditHistory) ? lead.auditHistory : [];
+  if (history.length === 0) {
+    els.modalAuditHistory.classList.add('hidden');
+    els.modalAuditHistory.innerHTML = '';
+    return;
+  }
+
+  const sourceLabels = {
+    scrape: 'Búsqueda Maps',
+    reaudit: 'Re-auditoría manual',
+    manual: 'Auditoría 1-Web'
+  };
+
+  const itemsHtml = [...history]
+    .reverse()
+    .slice(0, 6)
+    .map((item) => {
+      const dateLabel = item.date
+        ? new Date(item.date).toLocaleString('es-CO', {
+            day: 'numeric',
+            month: 'short',
+            hour: '2-digit',
+            minute: '2-digit'
+          })
+        : '';
+      const kindLabel =
+        item.kind === 'worsened'
+          ? '🔺 Empeoró / Oportunidad ↑'
+          : item.kind === 'improved'
+          ? '🔻 Mejoró'
+          : '🔄 Cambió';
+      const srcLabel = sourceLabels[item.source] || 'Auditoría';
+      return `
+        <div class="audit-history-item">
+          <div class="audit-history-top">
+            <span class="audit-delta-badge ${escapeHtml(item.kind || 'changed')}">${kindLabel}</span>
+            <span class="audit-history-meta">${escapeHtml(srcLabel)} · ${escapeHtml(dateLabel)}</span>
+          </div>
+          <div class="audit-history-summary">${escapeHtml(item.summary || '')}</div>
+        </div>
+      `;
+    })
+    .join('');
+
+  els.modalAuditHistory.innerHTML = `
+    <div class="audit-history-header">
+      <span>📈 Historial de cambios de auditoría y score (${history.length})</span>
+    </div>
+    <div class="audit-history-list">${itemsHtml}</div>
+  `;
+  els.modalAuditHistory.classList.remove('hidden');
+}
+
 // Abrir modal de Ficha Completa, Edición, Pitch y Auditoría
 function openPitchModal(leadId, options = {}) {
   const { focusSection = 'top', keepEditOpen = false } = options;
@@ -761,6 +918,27 @@ function openPitchModal(leadId, options = {}) {
   els.modalPainTags.innerHTML = (lead.painTags || [])
     .map((t) => `<span class="sub-tag">${escapeHtml(t)}</span>`)
     .join('');
+
+  renderAuditHistory(lead);
+
+  if (lead.hasUnreadAuditChange) {
+    lead.hasUnreadAuditChange = false;
+    renderTable();
+    fetch(`/api/leads/${lead.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hasUnreadAuditChange: false })
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.lead) {
+          const idx = allLeads.findIndex((l) => l.id === data.lead.id);
+          if (idx >= 0) allLeads[idx] = data.lead;
+          renderTable();
+        }
+      })
+      .catch(() => {});
+  }
 
   const count = lead.followUpCount || 0;
   const defaultStage = count === 0 ? 1 : count === 1 ? 2 : count === 2 ? 3 : 4;
@@ -953,6 +1131,19 @@ els.btnReauditLead.addEventListener('click', async () => {
       if (idx >= 0) allLeads[idx] = data.lead;
       renderTable();
       openPitchModal(data.lead.id);
+      if (data.auditChange) {
+        showToast({
+          title: data.auditChange.kind === 'worsened' ? '🔔 Oportunidad aumentó' : '🔄 Cambio detectado',
+          message: `${data.lead.name}: ${data.auditChange.summary}`,
+          variant: data.auditChange.kind === 'worsened' ? 'warn' : 'info'
+        });
+      } else {
+        showToast({
+          title: '✅ Re-auditoría lista',
+          message: `Sin cambios en ${data.lead.name}`,
+          variant: 'success'
+        });
+      }
     }
   } finally {
     btn.disabled = false;

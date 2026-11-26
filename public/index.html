@@ -195,6 +195,15 @@
         <div class="kpi-value" id="stat-whatsapp">0</div>
         <div class="kpi-sub">Línea celular 3xx para mensaje directo</div>
       </button>
+
+      <button type="button" class="kpi-card" id="kpi-card-changes" data-filter="AUDIT_CHANGED">
+        <div class="kpi-top">
+          <span class="kpi-label">🔔 Cambios Detectados</span>
+          <span class="kpi-badge slate" id="badge-audit-changes">Sin cambios</span>
+        </div>
+        <div class="kpi-value" id="stat-audit-changes">0</div>
+        <div class="kpi-sub">Negocios re-auditados con cambios</div>
+      </button>
     </section>
 
     <!-- ══ PANEL 3: TABLA INTERACTIVA DE PROSPECTOS & MINI-CRM ══ -->
@@ -218,6 +227,7 @@
 
           <select id="filter-sort" class="toolbar-select">
             <option value="score_desc">Ordenar: Mayor Score IVIA</option>
+            <option value="audit_change">Ordenar: Cambios Recientes</option>
             <option value="followup_due">Ordenar: Seguimientos Vencidos</option>
             <option value="reviews_desc">Ordenar: Más Reseñas en Maps</option>
             <option value="recent">Ordenar: Más Recientes</option>
@@ -234,20 +244,27 @@
 
       <div class="table-responsive">
         <table class="leads-table">
+          <colgroup>
+            <col class="col-score" />
+            <col class="col-biz" />
+            <col class="col-diag" />
+            <col class="col-contact" />
+            <col class="col-crm" />
+            <col class="col-actions" />
+          </colgroup>
           <thead>
             <tr>
               <th>Score</th>
               <th>Negocio &amp; Reputación</th>
-              <th>Diagnóstico Digital IVIA</th>
-              <th>Solución Sugerida</th>
-              <th>Contacto &amp; Canales</th>
+              <th>Diagnóstico &amp; Plan</th>
+              <th>Contacto</th>
               <th>Estado CRM</th>
-              <th style="text-align:right;">Acción Comercial</th>
+              <th style="text-align:right;">Acciones</th>
             </tr>
           </thead>
           <tbody id="leads-tbody">
             <tr>
-              <td colspan="7" class="empty-state">
+              <td colspan="6" class="empty-state">
                 No hay prospectos cargados aún. Lanza tu primera búsqueda arriba para empezar a detectar oportunidades.
               </td>
             </tr>
@@ -326,6 +343,7 @@
         <!-- Resumen Técnico de la Auditoría -->
         <div class="audit-summary-grid" id="modal-audit-grid"></div>
         <div class="modal-pain-tags" id="modal-pain-tags"></div>
+        <div class="audit-history-box hidden" id="modal-audit-history"></div>
 
         <!-- Sección de Pitch, Cadencia y Seguimiento -->
         <div class="modal-pitch-section" id="modal-pitch-section">
@@ -452,6 +470,8 @@
       </form>
     </div>
   </div>
+
+  <div class="toast-stack" id="toast-stack"></div>
 
   <script src="/js/app.js"></script>
 </body>
